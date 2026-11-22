@@ -5,7 +5,11 @@
 <h1 align="center">Cline Studio (Fork)</h1>
 
 <p align="center">
-Minimal monochrome dark grayscale edition of Cline with full-window Editor Panel support, inline model and context controls, per-message tok/s telemetry, and Studio workspace layout integration.
+
+
+Minimal monochrome dark grayscale edition of Cline with full-window Editor Panel support, inline model and context controls, per-message tok/s telemetry, and Studio workspace layout integration.<br>
+<img width="540" height="420" alt="image" src="https://github.com/user-attachments/assets/d3880e56-e492-4472-8694-ba7f00f1785b" />
+
 </p>
 
 > **Studio Distribution**: Pair this extension with the companion VS Code Studio fork at [tiadiff/vscode-cline-studio](https://github.com/tiadiff/vscode-cline-studio) for an isolated, distraction-free desktop workspace with a project picker, single-file editor, and File Explorer toggle.
