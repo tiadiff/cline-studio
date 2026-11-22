@@ -7,7 +7,9 @@
 <p align="center">
 
 
-Minimal monochrome dark grayscale edition of Cline with full-window Editor Panel support, inline model and context controls, per-message tok/s telemetry, and Studio workspace layout integration.<br>
+Minimal monochrome dark grayscale edition of Cline with full-window Editor Panel support, inline model and context controls, per-message tok/s telemetry, and Studio workspace layout integration.
+<br>
+
 <img width="540" height="420" alt="image" src="https://github.com/user-attachments/assets/d3880e56-e492-4472-8694-ba7f00f1785b" />
 
 </p>
