@@ -116,30 +116,39 @@ function formatDuration(ms: number): string {
 }
 
 /**
- * Invia una notifica nativa di sistema su Windows (Toast/Balloon) senza bloccare il thread.
+ * Invia una notifica nativa di sistema su Windows (Toast nativo WinRT) senza bloccare il thread.
  */
 function sendWindowsNotification(title: string, message: string): void {
 	if (process.platform !== "win32") {
 		return
 	}
 	try {
-		const safeTitle = title.replace(/[`"$]/g, "").slice(0, 80)
-		const safeMessage = message.replace(/[`"$]/g, "").slice(0, 200)
-		const script = [
-			"Add-Type -AssemblyName System.Windows.Forms",
-			"$n = New-Object System.Windows.Forms.NotifyIcon",
-			"$n.Icon = [System.Drawing.SystemIcons]::Information",
-			`$n.BalloonTipTitle = "${safeTitle}"`,
-			`$n.BalloonTipText = "${safeMessage}"`,
-			"$n.Visible = $true",
-			"$n.ShowBalloonTip(4000)",
-			"Start-Sleep -Milliseconds 1200",
-			"$n.Dispose()",
+		const escapeXml = (s: string) =>
+			s
+				.replace(/&/g, "&amp;")
+				.replace(/</g, "&lt;")
+				.replace(/>/g, "&gt;")
+				.replace(/"/g, "&quot;")
+				.replace(/'/g, "&apos;")
+
+		const safeTitle = escapeXml(title.slice(0, 80))
+		const safeMessage = escapeXml(message.slice(0, 200))
+
+		const psScript = [
+			"[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null",
+			"$doc = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]::new()",
+			`$xml = '<toast><visual><binding template=\"ToastGeneric\"><text>${safeTitle}</text><text>${safeMessage}</text></binding></visual></toast>'`,
+			"$doc.LoadXml($xml)",
+			"$toast = [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime]::new($doc)",
+			"$appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe'",
+			"[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show($toast)",
 		].join("; ")
+
+		const encoded = Buffer.from(psScript, "utf16le").toString("base64")
 
 		execFile(
 			"powershell.exe",
-			["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+			["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
 			{ timeout: 4000, windowsHide: true },
 			() => { },
 		)
