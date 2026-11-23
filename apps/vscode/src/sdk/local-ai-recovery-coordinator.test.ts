@@ -2,14 +2,14 @@ import { describe, expect, it, vi, beforeEach } from "vitest"
 import { LocalAiRecoveryCoordinator } from "./local-ai-recovery-coordinator"
 
 describe("LocalAiRecoveryCoordinator", () => {
-	let compactTask: ReturnType<typeof vi.fn>
-	let sendAskResponse: ReturnType<typeof vi.fn>
+	let compactTask: any
+	let sendAskResponse: any
 
 	beforeEach(() => {
 		compactTask = vi.fn().mockResolvedValue(undefined)
 		sendAskResponse = vi.fn().mockResolvedValue(undefined)
 		// Mock global fetch
-		global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true }) } as any)
+		global.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ ok: true }) } as any) as any
 	})
 
 	it("executes recovery: flushes vram, compacts task and sends resume prompt", async () => {
@@ -73,5 +73,35 @@ describe("LocalAiRecoveryCoordinator", () => {
 		expect(sendAskResponse).toHaveBeenCalledTimes(6)
 
 		vi.restoreAllMocks()
+	})
+
+	it("waits for session idle before compacting and still resumes if compaction fails", async () => {
+		const order: string[] = []
+		let running = true
+		const waitForSessionIdle = vi.fn().mockImplementation(async () => {
+			order.push("waitForSessionIdle")
+			running = false
+		})
+		const failingCompact = vi.fn().mockImplementation(async () => {
+			order.push(`compact(running=${running})`)
+			throw new Error("compaction failed")
+		})
+		const trackedSend = vi.fn().mockImplementation(async () => {
+			order.push("sendAskResponse")
+		})
+
+		const coordinator = new LocalAiRecoveryCoordinator({
+			compactTask: failingCompact,
+			sendAskResponse: trackedSend,
+			isSessionRunning: () => running,
+			waitForSessionIdle,
+			maxAttempts: 5,
+			windowMs: 180000,
+		})
+
+		const recovered = await coordinator.handleTurnError("custom resume")
+		expect(recovered).toBe(true)
+		expect(order).toEqual(["waitForSessionIdle", "compact(running=false)", "sendAskResponse"])
+		expect(trackedSend).toHaveBeenCalledWith("custom resume")
 	})
 })

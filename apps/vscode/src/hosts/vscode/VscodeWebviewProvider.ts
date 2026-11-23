@@ -136,7 +136,14 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 
 		Logger.log("[VscodeWebviewProvider] Webview view resolved")
 
-		// Title setting logic removed to allow VSCode to use the container title primarily.
+		try {
+			const buildInfo = require("../../build-info.json")
+			if (buildInfo?.build) {
+				webviewView.title = `Cline #${buildInfo.build}`
+			}
+		} catch {
+			// ignore reading error
+		}
 	}
 
 	/**
@@ -239,6 +246,29 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 					type: "studio_prompt_progress",
 					promptProgress: progress,
 				})
+				break
+			}
+			case "studio_get_orchestrator_state": {
+				const orchestratorState = this.controller.getOrchestratorState?.()
+				if (orchestratorState) {
+					await this.postMessageToWebview({
+						type: "studio_orchestrator_state",
+						orchestratorState,
+					})
+				}
+				break
+			}
+			case "studio_set_orchestrator_state": {
+				const orchestratorState = await this.controller.setOrchestratorState?.({
+					enabled: message.orchestratorEnabled,
+					modelId: message.orchestratorModelId,
+				})
+				if (orchestratorState) {
+					await this.postMessageToWebview({
+						type: "studio_orchestrator_state",
+						orchestratorState,
+					})
+				}
 				break
 			}
 			default: {

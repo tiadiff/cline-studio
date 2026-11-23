@@ -69,6 +69,7 @@ export interface SdkInteractionCoordinatorOptions {
 	 * shown in tool-approval asks (display only). Optional for tests.
 	 */
 	getCwd?: () => string | undefined
+	onMistakeLimitReached?: (context: ConsecutiveMistakeLimitContext) => void
 }
 
 export class SdkInteractionCoordinator {
@@ -111,6 +112,12 @@ export class SdkInteractionCoordinator {
 			payload: { sessionId: this.options.getSessionId(), status: "running" },
 		})
 		await this.options.postStateToWebview()
+
+		try {
+			this.options.onMistakeLimitReached?.(context)
+		} catch (err) {
+			Logger.error("[SdkInteractionCoordinator] onMistakeLimitReached failed:", err)
+		}
 
 		return { action: "stop", reason: `mistake_limit_reached: ${latest}` }
 	}

@@ -19,6 +19,9 @@ vi.mock("@/context/ExtensionStateContext", () => ({
 		remoteConfigSettings: undefined,
 		navigateToSettingsModelPicker: mocks.navigateToSettingsModelPicker,
 		mcpServers: [],
+		startProviderModelsRequest: vi.fn(),
+		applyProviderModelsResponse: vi.fn(),
+		providerModelsByProvider: {},
 		...mocks.cloudState,
 	}),
 }))
@@ -45,6 +48,10 @@ vi.mock("@/services/grpc-client", () => ({
 	},
 	StateServiceClient: {
 		togglePlanActModeProto: vi.fn(async () => ({})),
+	},
+	ModelsServiceClient: {
+		readProviderConfig: vi.fn(async () => ({})),
+		resolveProviderModels: vi.fn(async () => ({ models: [] })),
 	},
 }))
 
@@ -91,7 +98,8 @@ describe("ChatTextArea model label", () => {
 
 	it("shows the local provider, model, and local-only controls for a local task", () => {
 		const { textarea } = renderTextArea()
-		expect(screen.getByTitle("Open API Settings")).toHaveTextContent("anthropic:text-only-model")
+		expect(screen.getByTestId("quick-model-select")).toBeInTheDocument()
+		expect(screen.getByTitle("Configurazione Provider & API")).toBeInTheDocument()
 		expect(screen.getByTestId("context-button")).toBeInTheDocument()
 		expect(screen.getByTestId("mcp-toggle")).toBeInTheDocument()
 		expect(screen.getByTestId("rules-toggle")).toBeInTheDocument()
@@ -184,5 +192,41 @@ describe("ChatTextArea image attachments vs. model capability", () => {
 		renderTextArea()
 
 		expect(screen.queryByTestId("images-unsupported-notice")).not.toBeInTheDocument()
+	})
+
+	it("renders an orange border in plan mode and keeps the grey border in act mode", () => {
+		mocks.cloudState = { mode: "plan" }
+		const { unmount } = render(
+			<ChatTextArea
+				activeQuote={null}
+				inputValue=""
+				onSelectFilesAndImages={vi.fn()}
+				onSend={vi.fn()}
+				placeholderText="Type a message"
+				selectedFiles={[]}
+				selectedImages={[]}
+				sendingDisabled={false}
+				setInputValue={vi.fn()}
+				setSelectedFiles={vi.fn()}
+				setSelectedImages={vi.fn()}
+				shouldDisableFilesAndImages={false}
+			/>,
+		)
+		expect(screen.getByTestId("chat-textarea-container").className).toContain("border-[#f97316]")
+		unmount()
+
+		mocks.cloudState = { mode: "act" }
+		renderTextArea()
+		expect(screen.getByTestId("chat-textarea-container").className).toContain("border-white/")
+		expect(screen.getByTestId("chat-textarea-container").className).not.toContain("border-[#f97316]")
+	})
+
+	it("renders the AI Orchestrator toggle button in the Cline window and toggles on click", () => {
+		renderTextArea()
+		const orchBtn = screen.getByTestId("orchestrator-toggle-button")
+		expect(orchBtn).toBeInTheDocument()
+		expect(orchBtn).toHaveTextContent("Orch: OFF")
+		fireEvent.click(orchBtn)
+		expect(orchBtn).toHaveTextContent("Orch: ON")
 	})
 })

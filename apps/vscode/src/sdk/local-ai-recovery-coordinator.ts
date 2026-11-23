@@ -7,6 +7,8 @@ export interface LocalAiRecoveryOptions {
 	compactTask: () => Promise<void>
 	sendAskResponse: (prompt: string) => Promise<void>
 	isLocalProvider?: () => boolean
+	isSessionRunning?: () => boolean
+	waitForSessionIdle?: () => Promise<void>
 }
 
 /**
@@ -30,7 +32,7 @@ export class LocalAiRecoveryCoordinator {
 		this.windowMs = options.windowMs ?? 3 * 60 * 1000 // 3 minutes
 	}
 
-	async handleTurnError(): Promise<boolean> {
+	async handleTurnError(customPrompt?: string): Promise<boolean> {
 		if (this.isRecovering) {
 			Logger.log("[LocalAiRecovery] Recovery already in flight; ignoring duplicate error trigger")
 			return false
@@ -58,10 +60,27 @@ export class LocalAiRecoveryCoordinator {
 		try {
 			Logger.log(`[LocalAiRecovery] Starting auto-recovery attempt ${attemptNumber}/${this.maxAttempts}...`)
 
-			// Step 1: Free VRAM / unload model from LocalAI Gateway
+			// Step 1: Wait until the active session turn has completely stopped and settled into idle/resumable state.
+			// Must happen BEFORE compactTask() and sendAskResponse() because compactTask() refuses to run while
+			// activeSession.isRunning is true, and send() while running queues into a dying error turn.
+			if (this.options.waitForSessionIdle || this.options.isSessionRunning) {
+				await new Promise((resolve) => setTimeout(resolve, 150))
+				try {
+					await this.options.waitForSessionIdle?.()
+				} catch (waitErr) {
+					Logger.warn("[LocalAiRecovery] waitForSessionIdle warning:", waitErr)
+				}
+				let waitCycles = 0
+				while (this.options.isSessionRunning?.() && waitCycles < 40) {
+					await new Promise((resolve) => setTimeout(resolve, 250))
+					waitCycles++
+				}
+			}
+
+			// Step 2: Free VRAM / unload model from LocalAI Gateway
 			try {
 				const controller = new AbortController()
-				const timeout = setTimeout(() => controller.abort(), 3000)
+				const timeout = setTimeout(() => controller.abort(), 4000)
 				const res = await fetch(this.freeVramUrl, {
 					method: "POST",
 					signal: controller.signal,
@@ -74,16 +93,26 @@ export class LocalAiRecoveryCoordinator {
 				Logger.warn("[LocalAiRecovery] Failed to notify LocalAI Gateway to free VRAM (gateway might be idle/down):", fetchErr)
 			}
 
-			// Step 2: Compact context window
-			Logger.log("[LocalAiRecovery] Compacting context window...")
-			await this.options.compactTask()
+			// Step 3: Compact context window (non-fatal: always continue to Step 4 even if compaction is skipped or fails)
+			try {
+				Logger.log("[LocalAiRecovery] Compacting context window...")
+				await this.options.compactTask()
+			} catch (compactErr) {
+				Logger.warn("[LocalAiRecovery] Compacting context window skipped or failed:", compactErr)
+			}
 
-			// Short pause to ensure clean model state
+			// Ensure session is still idle after compaction and settle state
+			let postCompactCycles = 0
+			while (this.options.isSessionRunning?.() && postCompactCycles < 20) {
+				await new Promise((resolve) => setTimeout(resolve, 250))
+				postCompactCycles++
+			}
 			await new Promise((resolve) => setTimeout(resolve, 500))
 
-			// Step 3: Automatically resume task
-			Logger.log('[LocalAiRecovery] Sending "compact context and resume task"...')
-			await this.options.sendAskResponse("compact context and resume task")
+			// Step 4: Automatically resume task
+			const resumePrompt = customPrompt ?? "compact context and resume task"
+			Logger.log(`[LocalAiRecovery] Sending "${resumePrompt}"...`)
+			await this.options.sendAskResponse(resumePrompt)
 
 			Logger.log(`[LocalAiRecovery] Recovery attempt ${attemptNumber} successfully triggered.`)
 			return true

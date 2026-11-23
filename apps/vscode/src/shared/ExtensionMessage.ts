@@ -18,11 +18,28 @@ import { Mode } from "./storage/types"
 import { TelemetrySetting } from "./TelemetrySetting"
 import { UserInfo } from "./UserInfo"
 // webview will hold state
+export interface OrchestratorUiState {
+	enabled: boolean
+	modelId: string
+	planModelId?: string
+	actModelId?: string
+	status: "idle" | "evaluating_prompt" | "evaluating_plan"
+	phaseDetail?: string
+	startedAt?: number
+	revisionCount: number
+	maxRevisions: number
+}
+
 export interface ExtensionMessage {
-	type: "grpc_response" | "studio_workspace_panes_state" | "studio_prompt_progress" // New type for gRPC responses & Studio layout sync
+	type:
+		| "grpc_response"
+		| "studio_workspace_panes_state"
+		| "studio_prompt_progress"
+		| "studio_orchestrator_state" // New type for gRPC responses & Studio layout/orchestrator sync
 	grpc_response?: GrpcResponse
 	showExplorerAndEditor?: boolean
 	promptProgress?: number | null
+	orchestratorState?: OrchestratorUiState
 }
 
 export type GrpcResponse = {
@@ -162,6 +179,7 @@ export interface ExtensionState {
 	/** Whether the account has ClinePass for cloud tasks; unset until checked, or when the check failed. */
 	clinePassSubscribed?: boolean
 	openAiCodexIsAuthenticated?: boolean
+	orchestratorState?: OrchestratorUiState
 }
 
 /**

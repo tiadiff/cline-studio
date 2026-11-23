@@ -204,8 +204,24 @@ function sanitizeResolvedModelInfo(modelInfo: ModelInfo): ModelInfo {
 	return next
 }
 
+function inferContextWindowFromModelId(modelId: string): number | undefined {
+	const match = modelId.match(/[-_](\d+)K(?:[-_]|$)/i)
+	if (match) {
+		const kNum = Number.parseInt(match[1], 10)
+		if (Number.isFinite(kNum) && kNum > 0) {
+			return kNum * 1024
+		}
+	}
+	return undefined
+}
+
 function fallbackModelInfo(modelId: string): ModelInfo {
-	return sanitizeResolvedModelInfo({ ...openAiModelInfoSafeDefaults, name: modelId })
+	const inferredCtx = inferContextWindowFromModelId(modelId)
+	return sanitizeResolvedModelInfo({
+		...openAiModelInfoSafeDefaults,
+		name: modelId,
+		...(inferredCtx ? { contextWindow: inferredCtx } : {}),
+	})
 }
 
 function toStoredCapabilities(capabilities: readonly string[] | undefined): StoredModelEntry["capabilities"] | undefined {
@@ -696,7 +712,7 @@ function writeProviderSettingsFields(providerId: ProviderId, patch: ProviderConf
 			if (reasoningPatch.budgetTokens !== undefined) {
 				merged.budgetTokens = reasoningPatch.budgetTokens
 			}
-			;(next as Record<string, unknown>).reasoning = merged
+			; (next as Record<string, unknown>).reasoning = merged
 		}
 	}
 
@@ -831,8 +847,7 @@ function migrateLegacyModelOverridesIfNeeded(providerId: ProviderId, modelId: st
 			// The migration is best-effort and runs inside read paths; a
 			// failed write (read-only fs, disk full) must not fail read RPCs.
 			Logger.warn(
-				`[ModelCatalog] Failed to migrate legacy overrides for provider=${providerId} model=${modelId}: ${
-					error instanceof Error ? error.message : String(error)
+				`[ModelCatalog] Failed to migrate legacy overrides for provider=${providerId} model=${modelId}: ${error instanceof Error ? error.message : String(error)
 				}`,
 			)
 		}

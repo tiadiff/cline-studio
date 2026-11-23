@@ -1,6 +1,7 @@
 import { HistoryIcon, PanelLeftIcon, PlusIcon, PuzzleIcon, SettingsIcon, UserCircleIcon } from "lucide-react"
 import { useMemo } from "react"
 import ClineLogoVariable from "@/assets/ClineLogoVariable"
+import buildInfo from "@/build-info.json"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useStudioWorkspacePanes } from "@/hooks/useStudioWorkspacePanes"
 import { useExtensionState } from "../../context/ExtensionStateContext"
@@ -89,6 +90,7 @@ export const Navbar = ({ startNewTask }: NavbarProps) => {
 					<ClineLogoVariable className="size-3.5 text-[#eceef0]" />
 				</span>
 				<span className="text-[13.5px] font-medium tracking-[-0.015em] text-[#eceef0]">Cline</span>
+				<span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-white/[0.08] text-[#a0a6b0] border border-white/[0.08]">#{buildInfo.build}</span>
 				<span className="h-3.5 w-px bg-white/[0.1]" />
 				<span className="text-[10.5px] font-geist-mono uppercase tracking-[0.12em] text-[#70767f]">Studio</span>
 			</button>

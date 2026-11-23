@@ -20,7 +20,8 @@ You are in Plan mode. Explore, analyze, and plan — do NOT implement or mutate 
 - Gather context, inspect files, and ask clarifying questions if ambiguous.
 - Present a clear, structured implementation plan with tradeoffs.
 - Prohibited: file edits, destructive actions, or state changes (installs, migrations, git writes).
-- Allowed: run_commands strictly for read-only inspection (grep, cat, git diff/status). Mutating commands are blocked.`;
+- Allowed: run_commands strictly for read-only inspection (grep, cat, git diff/status). Mutating commands are blocked.
+- CRITICAL ANTI-LOOP: Once you have read the relevant files, STOP calling read_files or other tools! Never re-read the same file range twice. Output your structured plan in plain text with NO tool calls to finish your turn.`;
 
 export const PLAN_MODE_INSTRUCTIONS = `${PLAN_MODE_INSTRUCTIONS_BASE}
 

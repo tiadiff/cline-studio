@@ -115,7 +115,7 @@ const SwitchContainer = styled.div`
 
 const Slider = styled.div.withConfig({
 	shouldForwardProp: (prop) => !["isAct", "isPlan"].includes(prop),
-})<{ isAct: boolean; isPlan?: boolean }>`
+}) <{ isAct: boolean; isPlan?: boolean }>`
 	position: absolute;
 	top: 2px;
 	bottom: 2px;
@@ -1446,16 +1446,24 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 			.togglePlanActKeys.replace("Meta", metaKeyChar)
 			.replace(/.$/, (match) => match.toUpperCase())
 
+		const isPlanMode = mode === "plan"
+
 		return (
 			<div
 				className={cn(
 					"rounded-2xl bg-[#151618] border transition-all duration-150 shadow-[0_8px_32px_rgba(0,0,0,0.35)]",
 					isDraggingOver && !showUnsupportedFileError
 						? "border-dashed border-white/40 bg-[#181a1d]"
-						: isTextAreaFocused
-							? "border-white/[0.24] bg-[#17181b]"
-							: "border-white/[0.09] hover:border-white/[0.14]",
-				)}>
+						: isPlanMode
+							? isTextAreaFocused
+								? "border-[#f97316]! shadow-[0_0_0_1px_#f97316] bg-[#17181b]"
+								: "border-[#f97316]! hover:border-[#f97316]!"
+							: isTextAreaFocused
+								? "border-white/[0.24] bg-[#17181b]"
+								: "border-white/[0.09] hover:border-white/[0.14]",
+				)}
+				data-testid="chat-textarea-container"
+				style={isPlanMode ? { borderColor: "#f97316" } : undefined}>
 				<div
 					className="relative flex transition-colors ease-in-out duration-100 px-3.5 pt-3 pb-2.5"
 					onDragEnter={handleDragEnter}
@@ -1642,10 +1650,9 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 						</span>
 					</div>
 				)}
-				<div className="flex justify-between items-center px-3 py-2 border-t border-white/[0.06] gap-2">
-					{/* Always render both components, but control visibility with CSS */}
-					<div className="relative flex-1 min-w-0 h-6 flex items-center">
-						{/* ButtonGroup - always in DOM but visibility controlled */}
+				<div className="flex flex-col px-3 py-2 border-t border-white/[0.06] gap-1.5">
+					{/* Row 1: Action Icons (@, +, MCP, Rules) + Model Selector, Refresh & API Settings */}
+					<div className="relative w-full min-w-0 h-6 flex items-center">
 						<ButtonGroup className="w-full h-6 z-10 flex items-center">
 							{!cloudActOnly && (
 								<Tooltip>
@@ -1712,41 +1719,52 @@ const ChatTextArea = forwardRef<HTMLTextAreaElement, ChatTextAreaProps>(
 									cloudActOnly={cloudActOnly}
 									mode={mode}
 									onOpenApiSettings={handleModelButtonClick}
+									section="model"
 								/>
 							)}
 						</ButtonGroup>
 					</div>
+
+					{/* Row 2: Ctx, Think, Orchestrator Toggle (left) + Plan / Act Switch (right) */}
 					{!cloudActOnly && (
-						<Tooltip>
-							<TooltipContent
-								className="text-xs px-2 flex flex-col gap-1"
-								hidden={shownTooltipMode === null}
-								side="top">
-								{`In ${shownTooltipMode === "act" ? "Act" : "Plan"} mode, Cline will ${shownTooltipMode === "act" ? "complete the task immediately" : "gather information to architect a plan"}`}
-								<p className="text-description/80 text-xs mb-0">
-									Toggle w/ <kbd className="text-muted-foreground mx-1">{togglePlanActKeys}</kbd>
-								</p>
-							</TooltipContent>
-							<TooltipTrigger>
-								<SwitchContainer data-testid="mode-switch" onClick={onModeToggle}>
-									<Slider isAct={mode === "act"} isPlan={mode === "plan"} />
-									{["Plan", "Act"].map((m) => (
-										<div
-											aria-checked={mode === m.toLowerCase()}
-											className={cn(
-												"py-0.5 px-2.5 z-10 text-[11.5px] font-medium w-1/2 text-center bg-transparent transition-colors",
-												mode === m.toLowerCase() ? "text-[#f2f4f7]" : "text-[#747a84]",
-											)}
-											key={m}
-											onMouseLeave={() => setShownTooltipMode(null)}
-											onMouseOver={() => setShownTooltipMode(m.toLowerCase() === "plan" ? "plan" : "act")}
-											role="switch">
-											{m}
-										</div>
-									))}
-								</SwitchContainer>
-							</TooltipTrigger>
-						</Tooltip>
+						<div className="flex justify-between items-center w-full min-w-0 pt-1 border-t border-white/[0.04] gap-2">
+							<QuickModelContextControls
+								cloudActOnly={cloudActOnly}
+								mode={mode}
+								onOpenApiSettings={handleModelButtonClick}
+								section="controls"
+							/>
+							<Tooltip>
+								<TooltipContent
+									className="text-xs px-2 flex flex-col gap-1"
+									hidden={shownTooltipMode === null}
+									side="top">
+									{`In ${shownTooltipMode === "act" ? "Act" : "Plan"} mode, Cline will ${shownTooltipMode === "act" ? "complete the task immediately" : "gather information to architect a plan"}`}
+									<p className="text-description/80 text-xs mb-0">
+										Toggle w/ <kbd className="text-muted-foreground mx-1">{togglePlanActKeys}</kbd>
+									</p>
+								</TooltipContent>
+								<TooltipTrigger>
+									<SwitchContainer data-testid="mode-switch" onClick={onModeToggle}>
+										<Slider isAct={mode === "act"} isPlan={mode === "plan"} />
+										{["Plan", "Act"].map((m) => (
+											<div
+												aria-checked={mode === m.toLowerCase()}
+												className={cn(
+													"py-0.5 px-2.5 z-10 text-[11.5px] font-medium w-1/2 text-center bg-transparent transition-colors",
+													mode === m.toLowerCase() ? "text-[#f2f4f7]" : "text-[#747a84]",
+												)}
+												key={m}
+												onMouseLeave={() => setShownTooltipMode(null)}
+												onMouseOver={() => setShownTooltipMode(m.toLowerCase() === "plan" ? "plan" : "act")}
+												role="switch">
+												{m}
+											</div>
+										))}
+									</SwitchContainer>
+								</TooltipTrigger>
+							</Tooltip>
+						</div>
 					)}
 				</div>
 			</div>

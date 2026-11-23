@@ -46,12 +46,13 @@ function getLocalAiDisabledModels(): Set<string> {
  */
 export async function refreshOpenAiModels(controller: Controller, request: OpenAiModelsRequest): Promise<StringArray> {
 	try {
-		const providerConfig = controller.getProviderConfigStore().read(parseProviderId(request.providerId || "openai"))
+		const providerConfig = controller.getProviderConfigStore?.().read(parseProviderId(request.providerId || "openai"))
+		const apiConfig = controller.stateManager?.getApiConfiguration?.()
 		// Trailing slashes would produce "<baseUrl>//models", which many
 		// servers reject even though chat completions still work (the AI SDK
 		// normalizes the base URL for those).
-		const baseUrl = providerConfig.baseUrl?.trim().replace(/\/+$/, "")
-		const apiKey = providerConfig.apiKey
+		const baseUrl = (request.baseUrl || providerConfig?.baseUrl || apiConfig?.openAiBaseUrl)?.trim().replace(/\/+$/, "")
+		const apiKey = request.apiKey || providerConfig?.apiKey || apiConfig?.openAiApiKey || ""
 
 		if (!baseUrl) {
 			return StringArray.create({ values: [] })

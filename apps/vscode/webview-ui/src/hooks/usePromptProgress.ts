@@ -41,3 +41,25 @@ export function usePromptProgress(isStreaming: boolean): number | null {
 
 	return progress
 }
+
+/**
+ * Tracks live elapsed seconds while an LLM turn or reasoning step is streaming.
+ */
+export function useStreamingElapsedSeconds(active: boolean, startTs?: number): number {
+	const [elapsedSec, setElapsedSec] = useState<number>(0)
+
+	useEffect(() => {
+		if (!active) {
+			return
+		}
+		const baseTs = startTs && startTs > 1_000_000_000_000 ? startTs : Date.now()
+		const update = () => {
+			setElapsedSec(Math.max(0, Math.round((Date.now() - baseTs) / 100) / 10))
+		}
+		update()
+		const timer = setInterval(update, 300)
+		return () => clearInterval(timer)
+	}, [active, startTs])
+
+	return elapsedSec
+}

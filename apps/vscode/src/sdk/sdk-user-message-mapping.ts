@@ -57,6 +57,7 @@ export function isSyntheticUserPrompt(text: string): boolean {
 	const normalized = stripModeNotices(normalizeUserInput(text))
 	return (
 		normalized.startsWith("[TASK RESUMPTION]") ||
+		normalized.startsWith("[ORCHESTRATOR PLAN FEEDBACK]") ||
 		normalized === ACT_MODE_CONTINUATION_PROMPT ||
 		// Hook-injected context is model-facing only; the runtime stamps these
 		// messages displayRole "system", and this text guard keeps transcripts

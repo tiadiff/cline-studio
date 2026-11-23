@@ -65,7 +65,7 @@ import SearchResultsDisplay from "./SearchResultsDisplay"
 import SubagentStatusRow from "./SubagentStatusRow"
 import { ThinkingRow } from "./ThinkingRow"
 import UserMessage from "./UserMessage"
-import { usePromptProgress } from "@/hooks/usePromptProgress"
+import { usePromptProgress, useStreamingElapsedSeconds } from "@/hooks/usePromptProgress"
 
 const HEADER_CLASSNAMES = "flex items-center gap-2.5 mb-3"
 
@@ -162,6 +162,8 @@ export const ChatRowContent = memo(
 			enableCheckpointsSetting: checkpointsSetting,
 			turnState,
 			currentCloudTask,
+			orchestratorState,
+			apiConfiguration,
 		} = useExtensionState()
 		// Cloud tasks edit files inside the sandbox: there is no local editor to
 		// preview in, so diffs render inline, and no local workspace to checkpoint.
@@ -903,15 +905,47 @@ export const ChatRowContent = memo(
 						const isReasoningStreaming = message.partial === true
 						const hasReasoningText = !!message.text?.trim()
 						const promptProgress = usePromptProgress(isReasoningStreaming)
-						const displayTitle = isReasoningStreaming
-							? (typeof promptProgress === "number" ? `Thinking... ${promptProgress}%` : "Thinking...")
-							: "Thinking"
+						const elapsedSec = useStreamingElapsedSeconds(isReasoningStreaming, message.ts)
+						const isVerboseOrchestrator = orchestratorState?.enabled === true
+						const activeModeModel =
+							mode === "plan"
+								? apiConfiguration?.planModeOpenAiModelId || apiConfiguration?.planModeApiModelId
+								: apiConfiguration?.actModeOpenAiModelId || apiConfiguration?.actModeApiModelId
+						const reasoningTokensEst = hasReasoningText
+							? Math.max(1, Math.ceil((message.text?.length ?? 0) / 3.6))
+							: 0
+
+						let displayTitle: string
+						if (isVerboseOrchestrator) {
+							const modeBadge = `[${(mode ?? "plan").toUpperCase()}${activeModeModel ? ` • ${activeModeModel}` : ""}]`
+							if (isReasoningStreaming) {
+								const phaseText =
+									typeof promptProgress === "number"
+										? `Lettura prompt (Prefill GPU): ${promptProgress}%`
+										: hasReasoningText
+											? `Ragionamento in corso (~${reasoningTokensEst} tok)`
+											: "Caricamento modello in VRAM / Attesa primo token..."
+								displayTitle = `Thinking ${modeBadge} — ${phaseText} • ⏱️ ${elapsedSec.toFixed(1)}s`
+							} else {
+								displayTitle = `Thinking ${modeBadge} — Completato (~${reasoningTokensEst} token di ragionamento)`
+							}
+						} else {
+							displayTitle = isReasoningStreaming
+								? typeof promptProgress === "number"
+									? `Thinking... ${promptProgress}%`
+									: "Thinking..."
+								: "Thinking"
+						}
 						// Show feature tips throughout the entire thinking/reasoning phase
 						const _showFeatureTip = isReasoningStreaming
 						return (
 							<div>
 								<ThinkingRow
-									isExpanded={(isReasoningStreaming && hasReasoningText) || isExpanded}
+									isExpanded={
+										(isReasoningStreaming && hasReasoningText) ||
+										(isVerboseOrchestrator && hasReasoningText) ||
+										isExpanded
+									}
 									isStreaming={isReasoningStreaming}
 									isVisible={true}
 									onToggle={isReasoningStreaming ? undefined : handleToggle}
@@ -1050,6 +1084,21 @@ export const ChatRowContent = memo(
 						return <CompactionRow message={message} />
 					case "cloud_provisioning":
 						return <CloudProvisioningRow active={lastModifiedMessage?.ts === message.ts} message={message} />
+					case "info": {
+						const isOrchestratorInfo = !!message.text?.includes("Orchestratore AI")
+						return (
+							<div
+								className={cn(
+									"rounded-xl px-3.5 py-2.5 my-1 text-xs",
+									isOrchestratorInfo
+										? "border border-[#10b981]/30 bg-[#10b981]/[0.06] text-[#eceef0]"
+										: "border border-white/[0.08] bg-white/[0.03] text-foreground",
+								)}
+								data-testid="info-message-row">
+								<MarkdownRow markdown={message.text} />
+							</div>
+						)
+					}
 					default:
 						return (
 							<div>

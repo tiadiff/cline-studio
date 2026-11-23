@@ -329,6 +329,9 @@ export class SdkFollowupCoordinator {
 	}
 
 	private emitUserFeedback(sessionId: string, prompt?: string, images?: string[], files?: string[]): void {
+		if (prompt?.trim().startsWith("[ORCHESTRATOR PLAN FEEDBACK]") && !images?.length && !files?.length) {
+			return
+		}
 		const hasPrompt = !!prompt?.trim()
 		const hasImages = !!images?.length
 		const hasFiles = !!files?.length

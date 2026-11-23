@@ -40,6 +40,7 @@ export interface SdkSessionEventCoordinatorOptions {
 	captureProviderApiError?: (event: ProviderFailureTelemetry) => void
 	beginProviderFailureTelemetryTurn?: () => void
 	onTurnErrorDetected?: () => void
+	onTurnCompleted?: () => void
 }
 
 export class SdkSessionEventCoordinator {
@@ -117,10 +118,12 @@ export class SdkSessionEventCoordinator {
 				// the phase stuck on "streaming" (endless Thinking).
 				if (!activeSession.isRunning && this.options.getTurnPhase?.() === "resumable") {
 					Logger.debug("[SdkController] turn-complete straggler after cancel; preserving resumable phase")
+					this.options.sessions.setRunning(false)
 				} else if (this.options.messageTranslatorState.wasErrorSeen()) {
 					// The turn surfaced a provider error (ask:"api_req_failed" was emitted) —
 					// offer error recovery (Retry / Start New Task), not the followup state.
 					this.options.setTurnPhase?.("error")
+					this.options.sessions.setRunning(false)
 					try {
 						this.options.onTurnErrorDetected?.()
 					} catch (err) {
@@ -128,11 +131,21 @@ export class SdkSessionEventCoordinator {
 					}
 				} else if (this.options.messageTranslatorState.wasAttemptCompletionSeen()) {
 					this.options.setTurnPhase?.("completed")
+					this.options.sessions.setRunning(false)
+					try {
+						this.options.onTurnCompleted?.()
+					} catch (err) {
+						Logger.error("[SdkController] onTurnCompleted failed:", err)
+					}
 				} else {
 					this.options.setTurnPhase?.("awaiting_followup")
+					this.options.sessions.setRunning(false)
+					try {
+						this.options.onTurnCompleted?.()
+					} catch (err) {
+						Logger.error("[SdkController] onTurnCompleted failed:", err)
+					}
 				}
-
-				this.options.sessions.setRunning(false)
 			}
 
 			if (result.usage && activeSession.startResult) {

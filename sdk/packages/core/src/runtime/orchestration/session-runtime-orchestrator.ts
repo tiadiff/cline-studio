@@ -1579,6 +1579,8 @@ export class SessionRuntime {
 			}
 			const outcome = await this.mistakeTracker.record(input);
 			if (outcome.action === "stop") {
+				this.mistakeTracker.reset();
+				this.loopTracker.reset();
 				this.trackerAbortInFlight = true;
 				this.trackerStopReason = outcome.reason ?? outcome.message;
 				this.conversation.appendMessage({
@@ -1586,6 +1588,8 @@ export class SessionRuntime {
 					content: [{ type: "text", text: outcome.message }],
 				});
 				this.activeRuntime?.abort(outcome.reason ?? outcome.message);
+			} else {
+				this.loopTracker.reset();
 			}
 		});
 	}

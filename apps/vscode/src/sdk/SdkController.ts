@@ -96,6 +96,7 @@ import { SdkSessionConfigBuilder } from "./sdk-session-config-builder"
 import { SdkSessionConfigChangeCoordinator } from "./sdk-session-config-change-coordinator"
 import { SdkSessionEventCoordinator } from "./sdk-session-event-coordinator"
 import { LocalAiRecoveryCoordinator } from "./local-ai-recovery-coordinator"
+import { LocalAiOrchestratorCoordinator, type OrchestratorStateSnapshot } from "./local-ai-orchestrator-coordinator"
 import { SdkSessionHistoryLoader } from "./sdk-session-history-loader"
 import { SdkSessionLifecycle } from "./sdk-session-lifecycle"
 import { SdkSessionRebuildScheduler } from "./sdk-session-rebuild-scheduler"
@@ -224,6 +225,7 @@ export class Controller {
 	private compaction: SdkCompactionCoordinator
 	private sessionEvents: SdkSessionEventCoordinator
 	private localAiRecovery: LocalAiRecoveryCoordinator
+	private localAiOrchestrator: LocalAiOrchestratorCoordinator
 	private cloud!: SdkCloudSessionCoordinator
 	readonly cloudSessions: CloudSessionsService
 	readonly cloudTaskTarget: SdkCloudTaskTarget
@@ -422,6 +424,12 @@ export class Controller {
 				return autoApprovalSettings ? isToolAutoApproved(request.toolName, autoApprovalSettings) : false
 			},
 			getCwd: () => this.lastKnownWorkspaceRoot,
+			onMistakeLimitReached: (context) => {
+				const reason = context.details ? `${context.reason}: ${context.details}` : context.reason
+				void this.localAiRecovery.handleTurnError(
+					`compact context and resume task. Previous attempt stopped due to repeated errors (${reason}). Change your approach, do not repeat identical commands, and proceed with the next step.`
+				)
+			},
 		})
 		this.sessions = new SdkSessionLifecycle({
 			mcpHub: this.mcpHub,
@@ -521,6 +529,7 @@ export class Controller {
 						],
 						{ type: "status", payload: { sessionId, status: "error" } },
 					)
+					void this.localAiRecovery.handleTurnError()
 				}
 				this.postStateToWebview().catch(() => {})
 			},
@@ -625,6 +634,7 @@ export class Controller {
 			postStateToWebview: () => this.postStateToWebview(),
 			onResumeFailed: () => {
 				this.turnStateTracker.set("error")
+				void this.localAiRecovery.handleTurnError()
 			},
 			onFollowUpAbandoned: () => {
 				// Settle the streaming phase askResponse pre-set, unless a turn
@@ -667,6 +677,10 @@ export class Controller {
 			createHistoryItemFromSession,
 			clearTask: async () => {
 				this.pendingStartRetry = undefined
+				this.localAiOrchestrator?.resetForNewTask()
+				if (this.localAiOrchestrator?.isEnabled()) {
+					this.stateManager.setGlobalState("mode", "plan")
+				}
 				await this.taskControl.clearTask()
 			},
 			setTask: (task) => {
@@ -762,10 +776,63 @@ export class Controller {
 		})
 		this.localAiRecovery = new LocalAiRecoveryCoordinator({
 			compactTask: () => this.compactTask(),
-			sendAskResponse: (prompt) => this.askResponse(prompt),
+			sendAskResponse: async (prompt) => {
+				if (this.task) {
+					await this.task.handleWebviewAskResponse("messageResponse", prompt)
+				} else {
+					await this.askResponse(prompt)
+				}
+			},
+			isSessionRunning: () => !!this.sessions.getActiveSession()?.isRunning,
+			waitForSessionIdle: async () => {
+				const active = this.sessions.getActiveSession()
+				if (active) {
+					await this.sessions.waitForTurnSend(active, 10000)
+				}
+			},
 			maxAttempts: 5,
 			windowMs: 3 * 60 * 1000,
 		})
+		this.localAiOrchestrator = new LocalAiOrchestratorCoordinator({
+			initialEnabled: !!this.stateManager.getGlobalStateKey("orchestratorEnabled"),
+			getApiConfiguration: () => this.stateManager.getApiConfiguration(),
+			getCurrentMode: () => this.getDisplayedTaskMode(),
+			setModeToPlan: async () => {
+				this.stateManager.setGlobalState("mode", "plan")
+				await this.postStateToWebview()
+			},
+			getClineMessages: () => this.task?.messageStateHandler.getClineMessages() ?? [],
+			getSessionId: () => this.sessions.getActiveSession()?.sessionId ?? this.task?.taskId ?? "",
+			isSessionRunning: () => !!this.sessions.getActiveSession()?.isRunning,
+			getWorkspaceRoot: () => this.getWorkspaceRoot(),
+			emitMessage: (msg) => {
+				this.messages.appendAndEmit([msg], {
+					type: "status",
+					payload: {
+						sessionId: this.sessions.getActiveSession()?.sessionId ?? this.task?.taskId ?? "",
+						status: "running",
+					},
+				})
+			},
+			postStateToWebview: () => this.postStateToWebview(),
+			triggerActMode: async () => {
+				await this.mode.rebuildSessionForMode("act", { autoContinue: true })
+			},
+			sendPlanRevisionPrompt: async (prompt) => {
+				if (this.task) {
+					await this.task.handleWebviewAskResponse("messageResponse", prompt)
+				} else {
+					await this.askResponse(prompt)
+				}
+			},
+			onStateChanged: () => {
+				void this.postStateToWebview().catch(() => {})
+			},
+		})
+		const savedOrchModelId = this.stateManager.getGlobalStateKey("orchestratorModelId")
+		if (savedOrchModelId) {
+			this.localAiOrchestrator.setCustomModelId(savedOrchModelId)
+		}
 		this.sessionEvents = new SdkSessionEventCoordinator({
 			messageTranslatorState: this.messageTranslatorState,
 			sessions: this.sessions,
@@ -780,6 +847,9 @@ export class Controller {
 			beginProviderFailureTelemetryTurn: () => this.beginProviderFailureTelemetryTurn(),
 			onTurnErrorDetected: () => {
 				void this.localAiRecovery.handleTurnError()
+			},
+			onTurnCompleted: () => {
+				void this.localAiOrchestrator.handlePlanTurnCompleted()
 			},
 		})
 		// Subscribe to MCP tool list changes so we can restart the SDK session
@@ -1215,25 +1285,27 @@ export class Controller {
 	 */
 	private async resolveContextMentions(text: string): Promise<string> {
 		const withCommands = await this.resolveSlashCommands(text)
+		let resolved = withCommands
 
 		// Quick check: skip mention parsing if there are no @ mentions
-		if (!mentionRegexGlobal.test(withCommands)) {
-			return withCommands
+		if (mentionRegexGlobal.test(withCommands)) {
+			// Reset lastIndex since RegExp.test() advances it for global regexes
+			mentionRegexGlobal.lastIndex = 0
+			try {
+				const cwd = await this.getWorkspaceRoot()
+				const urlContentFetcher = new UrlContentFetcher()
+				const workspaceManager = await this.ensureWorkspaceManager()
+				resolved = await parseMentions(withCommands, cwd, urlContentFetcher, undefined, workspaceManager)
+				Logger.log(`[SdkController] Resolved context mentions (${withCommands.length} → ${resolved.length} chars)`)
+			} catch (error) {
+				Logger.error("[SdkController] Failed to resolve context mentions, using raw text:", error)
+			}
 		}
-		// Reset lastIndex since RegExp.test() advances it for global regexes
-		mentionRegexGlobal.lastIndex = 0
 
-		try {
-			const cwd = await this.getWorkspaceRoot()
-			const urlContentFetcher = new UrlContentFetcher()
-			const workspaceManager = await this.ensureWorkspaceManager()
-			const resolved = await parseMentions(withCommands, cwd, urlContentFetcher, undefined, workspaceManager)
-			Logger.log(`[SdkController] Resolved context mentions (${withCommands.length} → ${resolved.length} chars)`)
-			return resolved
-		} catch (error) {
-			Logger.error("[SdkController] Failed to resolve context mentions, using raw text:", error)
-			return withCommands
+		if (this.localAiOrchestrator?.isEnabled() && this.getDisplayedTaskMode() === "plan") {
+			resolved = await this.localAiOrchestrator.evaluateUserPrompt(text, resolved)
 		}
+		return resolved
 	}
 
 	// ---- Workspace root resolution ----
@@ -1602,6 +1674,7 @@ export class Controller {
 	}
 
 	async cancelTask(): Promise<void> {
+		this.localAiOrchestrator?.abortActiveEvaluation()
 		// Fence first: mark resumable and invalidate provisioning before any abort await,
 		// so straggler work cannot restore the cancelled turn's streaming state.
 		this.turnStateTracker.set("resumable")
@@ -1667,6 +1740,9 @@ export class Controller {
 
 	async clearTask(): Promise<void> {
 		this.pendingStartRetry = undefined
+		this.localAiOrchestrator?.resetForNewTask()
+		// Reset mode to "plan" by default for every new task/conversation
+		this.stateManager.setGlobalState("mode", "plan")
 		// No active task — UI returns to idle (input enabled, no buttons/thinking).
 		this.turnStateTracker.set("idle")
 		// A cloud task still provisioning has no SDK session for taskControl to end;
@@ -1674,6 +1750,27 @@ export class Controller {
 		this.cloud.cancelPendingStart()
 		await this.taskControl.clearTask()
 		await this.postStateToWebview()
+	}
+
+	getOrchestratorState(): OrchestratorStateSnapshot {
+		return this.localAiOrchestrator.getStateSnapshot()
+	}
+
+	async setOrchestratorState(options: { enabled?: boolean; modelId?: string }): Promise<OrchestratorStateSnapshot> {
+		if (typeof options.enabled === "boolean") {
+			this.stateManager.setGlobalState("orchestratorEnabled", options.enabled)
+			this.localAiOrchestrator.setEnabled(options.enabled)
+			if (options.enabled && !this.sessions.getActiveSession()?.isRunning && !this.task) {
+				this.stateManager.setGlobalState("mode", "plan")
+			}
+		}
+		if (options.modelId !== undefined) {
+			const cleaned = options.modelId.trim() || undefined
+			this.stateManager.setGlobalState("orchestratorModelId", cleaned)
+			this.localAiOrchestrator.setCustomModelId(cleaned)
+		}
+		await this.postStateToWebview()
+		return this.localAiOrchestrator.getStateSnapshot()
 	}
 
 	async handleTaskCreation(prompt: string): Promise<void> {
@@ -2727,6 +2824,7 @@ export class Controller {
 				cloudModelId: isCloudSessionsFeatureEnabled() || currentCloudTask ? this.cloud.getCloudModelId() : undefined,
 				nextCloudModelId: isCloudSessionsFeatureEnabled() || currentCloudTask ? this.cloud.nextCloudModelId() : undefined,
 				clinePassSubscribed: isCloudSessionsFeatureEnabled() ? this.cloud.clinePassSubscribed() : undefined,
+				orchestratorState: this.localAiOrchestrator?.getStateSnapshot(),
 				stateVersion: minter.nextSeq(),
 				epoch: minter.epoch,
 			}
