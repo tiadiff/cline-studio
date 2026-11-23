@@ -217,6 +217,30 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 				})
 				break
 			}
+			case "studio_get_prompt_progress": {
+				let progress: number | null = null
+				try {
+					const controller = new AbortController()
+					const timeout = setTimeout(() => controller.abort(), 600)
+					const res = await fetch("http://127.0.0.1:8080/_localai/prompt_progress", {
+						signal: controller.signal,
+					})
+					clearTimeout(timeout)
+					if (res.ok) {
+						const data = (await res.json()) as { progress?: number | null }
+						if (typeof data?.progress === "number") {
+							progress = data.progress
+						}
+					}
+				} catch {
+					// Fallback: gateway unreachable or error
+				}
+				await this.postMessageToWebview({
+					type: "studio_prompt_progress",
+					promptProgress: progress,
+				})
+				break
+			}
 			default: {
 				Logger.error("Received unhandled WebviewMessage type:", JSON.stringify(message))
 			}

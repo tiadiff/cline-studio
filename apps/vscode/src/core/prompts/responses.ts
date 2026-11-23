@@ -9,10 +9,10 @@ const CONTEXT_WINDOW_WARNING_THRESHOLD_PERCENT = 50
 
 export const formatResponse = {
 	duplicateFileReadNotice: () =>
-		`[[NOTE] This file read has been removed to save space in the context window. Refer to the latest file read for the most up to date version of this file.]`,
+		`[[NOTE] Earlier read removed to save context. Use the latest read.]`,
 
 	contextTruncationNotice: () =>
-		`[NOTE] Some previous conversation history with the user has been removed to maintain optimal context window length. The initial user task has been retained for continuity, while intermediate conversation history has been removed. Keep this in mind as you continue assisting the user. Pay special attention to the user's latest messages.`,
+		`[NOTE] Intermediate history truncated for context space. The initial task and latest messages remain. Continue assisting the user based on recent instructions.]`,
 
 	processFirstUserMessageForTruncation: () => {
 		return "[Continue assisting the user!]"

@@ -39,6 +39,7 @@ export interface SdkSessionEventCoordinatorOptions {
 	getTurnPhase?: () => TurnPhase
 	captureProviderApiError?: (event: ProviderFailureTelemetry) => void
 	beginProviderFailureTelemetryTurn?: () => void
+	onTurnErrorDetected?: () => void
 }
 
 export class SdkSessionEventCoordinator {
@@ -120,6 +121,11 @@ export class SdkSessionEventCoordinator {
 					// The turn surfaced a provider error (ask:"api_req_failed" was emitted) —
 					// offer error recovery (Retry / Start New Task), not the followup state.
 					this.options.setTurnPhase?.("error")
+					try {
+						this.options.onTurnErrorDetected?.()
+					} catch (err) {
+						Logger.error("[SdkController] onTurnErrorDetected failed:", err)
+					}
 				} else if (this.options.messageTranslatorState.wasAttemptCompletionSeen()) {
 					this.options.setTurnPhase?.("completed")
 				} else {

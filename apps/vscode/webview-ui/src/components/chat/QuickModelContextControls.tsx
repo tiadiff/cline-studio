@@ -1,9 +1,20 @@
 import { StringRequest } from "@shared/proto/cline/common"
 import { OpenAiModelsRequest } from "@shared/proto/cline/models"
-import type { Mode } from "@shared/storage/types"
+import {
+	isOpenaiReasoningEffort,
+	type Mode,
+	OPENAI_REASONING_EFFORT_OPTIONS,
+	type OpenaiReasoningEffort,
+} from "@shared/storage/types"
 import { RefreshCwIcon, SlidersHorizontalIcon } from "lucide-react"
 import type React from "react"
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { getModeSpecificFields } from "@/components/settings/utils/providerUtils"
+import {
+	DEFAULT_REASONING_EFFORT_OPTION,
+	type ReasoningEffortSelection,
+	reasoningEffortPatch,
+} from "@/components/settings/utils/reasoningEffort"
 import { useApiConfigurationHandlers } from "@/components/settings/utils/useApiConfigurationHandlers"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useExtensionState } from "@/context/ExtensionStateContext"
@@ -17,6 +28,8 @@ const CONTEXT_WINDOW_PRESETS = [
 	{ value: 8192, label: "8k" },
 	{ value: 16384, label: "16k" },
 	{ value: 32768, label: "32k" },
+	{ value: 43008, label: "42k" },
+	{ value: 49152, label: "48k" },
 	{ value: 65536, label: "64k" },
 	{ value: 131072, label: "128k" },
 	{ value: 200000, label: "200k" },
@@ -24,6 +37,14 @@ const CONTEXT_WINDOW_PRESETS = [
 	{ value: 524288, label: "512k" },
 	{ value: 1000000, label: "1M" },
 ]
+
+const REASONING_EFFORT_LABELS: Record<OpenaiReasoningEffort, string> = {
+	none: "None",
+	low: "Low",
+	medium: "Medium",
+	high: "High",
+	xhigh: "Max",
+}
 
 function formatCtxLabel(val: number): string {
 	if (val >= 1_000_000) {
@@ -33,6 +54,21 @@ function formatCtxLabel(val: number): string {
 		return `${Math.round(val / 1024)}k`
 	}
 	return String(val)
+}
+
+/**
+ * Infer context window from model ID naming convention (e.g. "Inkling-2-Mini-26B-32K-50toks" -> 32768,
+ * "Ternary-Bonsai-2-27B-48K-45toks" -> 49152).
+ */
+function inferContextWindowFromModelId(modelId: string): number | undefined {
+	const match = modelId.match(/[-_](\d+)K(?:[-_]|$)/i)
+	if (match) {
+		const kNum = Number.parseInt(match[1], 10)
+		if (Number.isFinite(kNum) && kNum > 0) {
+			return kNum * 1024
+		}
+	}
+	return undefined
 }
 
 interface QuickModelContextControlsProps {
@@ -46,14 +82,28 @@ export const QuickModelContextControls: React.FC<QuickModelContextControlsProps>
 	cloudActOnly,
 	onOpenApiSettings,
 }) => {
-	const { apiConfiguration, planActSeparateModelsSetting } = useExtensionState()
+	const { apiConfiguration, planActSeparateModelsSetting, turnState, clineMessages = [] } = useExtensionState()
 	const { selectedProvider, selectedModelId, selectedModelInfo } = useNormalizedApiConfiguration(mode)
-	const { handleFieldChange } = useApiConfigurationHandlers()
-	const { config, write, commitSelection } = useProviderConfig(selectedProvider)
+	const { handleFieldChange, handleModeFieldChange } = useApiConfigurationHandlers()
+	const { config, write, commitSelection, reasoningEffort } = useProviderConfig(selectedProvider)
 	const { models: catalogModels, refresh: refreshCatalog } = useProviderModels(selectedProvider)
 
 	const [dynamicModels, setDynamicModels] = useState<string[]>([])
 	const [isRefreshing, setIsRefreshing] = useState(false)
+
+	// Controllo se il modello sta generando o pensando: in tal caso disabilitiamo il selettore
+	const lastMessage = clineMessages[clineMessages.length - 1]
+	const isStreamingLegacy =
+		lastMessage?.partial === true || (lastMessage?.type === "say" && lastMessage.say === "api_req_started")
+	const isGeneratingOrThinking = turnState?.phase === "streaming" || isStreamingLegacy
+
+	const modeFields = getModeSpecificFields(apiConfiguration, mode)
+	const activeReasoningEffort: ReasoningEffortSelection =
+		reasoningEffort !== null && reasoningEffort !== undefined
+			? reasoningEffort
+			: isOpenaiReasoningEffort(modeFields.reasoningEffort)
+				? modeFields.reasoningEffort
+				: DEFAULT_REASONING_EFFORT_OPTION
 
 	const isOpenAiCompat = selectedProvider === "openai" || (selectedProvider as string) === "openai-compatible"
 	const isOllama = selectedProvider === "ollama"
@@ -113,21 +163,42 @@ export const QuickModelContextControls: React.FC<QuickModelContextControlsProps>
 
 	const modelOptions = useMemo(() => {
 		const set = new Set<string>()
-		if (selectedModelId) {
-			set.add(selectedModelId)
-		}
-		for (const id of dynamicModels) {
-			if (id?.trim()) {
-				set.add(id.trim())
+		if (isOpenAiCompat) {
+			// Per OpenAI / OpenAI-compatible (gateway locale), mostriamo solo i modelli
+			// ritornati dall'endpoint dinamico (che filtra i modelli disabilitati),
+			// più il modello attualmente selezionato se presente.
+			if (selectedModelId) {
+				set.add(selectedModelId)
 			}
-		}
-		for (const id of Object.keys(catalogModels)) {
-			if (id?.trim()) {
-				set.add(id.trim())
+			for (const id of dynamicModels) {
+				if (id?.trim()) {
+					set.add(id.trim())
+				}
+			}
+			if (dynamicModels.length === 0) {
+				for (const id of Object.keys(catalogModels)) {
+					if (id?.trim()) {
+						set.add(id.trim())
+					}
+				}
+			}
+		} else {
+			if (selectedModelId) {
+				set.add(selectedModelId)
+			}
+			for (const id of dynamicModels) {
+				if (id?.trim()) {
+					set.add(id.trim())
+				}
+			}
+			for (const id of Object.keys(catalogModels)) {
+				if (id?.trim()) {
+					set.add(id.trim())
+				}
 			}
 		}
 		return Array.from(set)
-	}, [selectedModelId, dynamicModels, catalogModels])
+	}, [isOpenAiCompat, selectedModelId, dynamicModels, catalogModels])
 
 	const committedSelection = mode === "plan" ? config?.planSelection : config?.actSelection
 	const currentOverrides = useMemo(
@@ -148,6 +219,12 @@ export const QuickModelContextControls: React.FC<QuickModelContextControlsProps>
 		if (selectedModelInfo?.contextWindow && selectedModelInfo.contextWindow > 0) {
 			return selectedModelInfo.contextWindow
 		}
+		if (selectedModelId) {
+			const inferred = inferContextWindowFromModelId(selectedModelId)
+			if (inferred) {
+				return inferred
+			}
+		}
 		return 131072
 	}, [
 		currentOverrides.contextWindow,
@@ -155,6 +232,7 @@ export const QuickModelContextControls: React.FC<QuickModelContextControlsProps>
 		config?.contextWindow,
 		apiConfiguration?.ollamaApiOptionsCtxNum,
 		selectedModelInfo?.contextWindow,
+		selectedModelId,
 	])
 
 	const contextOptions = useMemo(() => {
@@ -189,12 +267,57 @@ export const QuickModelContextControls: React.FC<QuickModelContextControlsProps>
 				return
 			}
 			try {
-				await commitForTargetModes(nextModelId)
+				if (isOpenAiCompat) {
+					await handleModeFieldChange(
+						{ plan: "planModeOpenAiModelId", act: "actModeOpenAiModelId" },
+						nextModelId,
+						mode,
+					)
+				} else if (isOllama) {
+					await handleModeFieldChange(
+						{ plan: "planModeOllamaModelId", act: "actModeOllamaModelId" },
+						nextModelId,
+						mode,
+					)
+				} else if (isLmStudio) {
+					await handleModeFieldChange(
+						{ plan: "planModeLmStudioModelId", act: "actModeLmStudioModelId" },
+						nextModelId,
+						mode,
+					)
+				} else {
+					await handleModeFieldChange(
+						{ plan: "planModeApiModelId", act: "actModeApiModelId" },
+						nextModelId,
+						mode,
+					)
+				}
+
+				const inferredCtx = inferContextWindowFromModelId(nextModelId)
+				const catalogCtx = catalogModels[nextModelId]?.contextWindow
+				const targetCtx = inferredCtx ?? catalogCtx ?? currentOverrides.contextWindow
+
+				const nextOverrides = {
+					...currentOverrides,
+					...(targetCtx ? { contextWindow: targetCtx } : {}),
+				}
+
+				await commitForTargetModes(nextModelId, nextOverrides)
 			} catch (err) {
 				console.error("Failed to switch model:", err)
 			}
 		},
-		[commitForTargetModes, selectedModelId],
+		[
+			catalogModels,
+			commitForTargetModes,
+			currentOverrides,
+			handleModeFieldChange,
+			isLmStudio,
+			isOllama,
+			isOpenAiCompat,
+			mode,
+			selectedModelId,
+		],
 	)
 
 	const handleContextWindowSelect = useCallback(
@@ -222,6 +345,25 @@ export const QuickModelContextControls: React.FC<QuickModelContextControlsProps>
 			}
 		},
 		[commitForTargetModes, currentOverrides, handleFieldChange, isLmStudio, isOllama, selectedModelId, write],
+	)
+
+	const handleReasoningEffortSelect = useCallback(
+		async (e: React.ChangeEvent<HTMLSelectElement>) => {
+			const nextEffort = e.target.value as ReasoningEffortSelection
+			try {
+				if (isOpenaiReasoningEffort(nextEffort)) {
+					await handleModeFieldChange(
+						{ plan: "planModeReasoningEffort", act: "actModeReasoningEffort" },
+						nextEffort,
+						mode,
+					)
+				}
+				await write(reasoningEffortPatch(nextEffort))
+			} catch (err) {
+				console.error("Failed to update reasoning effort:", err)
+			}
+		},
+		[handleModeFieldChange, mode, write],
 	)
 
 	if (cloudActOnly) {
@@ -282,6 +424,33 @@ export const QuickModelContextControls: React.FC<QuickModelContextControlsProps>
 						{contextOptions.map((opt) => (
 							<option className="bg-[#151618] text-[#eceef0]" key={opt.value} value={opt.value}>
 								Ctx {opt.label}
+							</option>
+						))}
+					</select>
+				</TooltipTrigger>
+			</Tooltip>
+
+			{/* Inline Thinking / Reasoning Depth Select */}
+			<Tooltip>
+				<TooltipContent side="top">
+					Livello di Thinking / Profondità di ragionamento
+					{isGeneratingOrThinking ? " (non modificabile durante la generazione)" : ""}
+				</TooltipContent>
+				<TooltipTrigger asChild>
+					<select
+						aria-label="Thinking reasoning effort"
+						className="h-6 shrink-0 rounded-md bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.07] hover:border-white/[0.15] px-1.5 font-geist-mono text-[11px] text-[#9ea4ad] hover:text-[#f2f4f7] focus:outline-none focus:border-white/[0.25] cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+						data-testid="quick-thinking-select"
+						disabled={isGeneratingOrThinking}
+						onChange={handleReasoningEffortSelect}
+						style={{ colorScheme: "dark" }}
+						value={activeReasoningEffort}>
+						<option className="bg-[#151618] text-[#eceef0]" value={DEFAULT_REASONING_EFFORT_OPTION}>
+							Think: Def
+						</option>
+						{OPENAI_REASONING_EFFORT_OPTIONS.map((effort) => (
+							<option className="bg-[#151618] text-[#eceef0]" key={effort} value={effort}>
+								Think: {REASONING_EFFORT_LABELS[effort]}
 							</option>
 						))}
 					</select>

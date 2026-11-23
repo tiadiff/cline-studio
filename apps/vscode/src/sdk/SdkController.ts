@@ -95,6 +95,7 @@ import { SdkProviderChangeCoordinator } from "./sdk-provider-change-coordinator"
 import { SdkSessionConfigBuilder } from "./sdk-session-config-builder"
 import { SdkSessionConfigChangeCoordinator } from "./sdk-session-config-change-coordinator"
 import { SdkSessionEventCoordinator } from "./sdk-session-event-coordinator"
+import { LocalAiRecoveryCoordinator } from "./local-ai-recovery-coordinator"
 import { SdkSessionHistoryLoader } from "./sdk-session-history-loader"
 import { SdkSessionLifecycle } from "./sdk-session-lifecycle"
 import { SdkSessionRebuildScheduler } from "./sdk-session-rebuild-scheduler"
@@ -222,6 +223,7 @@ export class Controller {
 	private taskStart: SdkTaskStartCoordinator
 	private compaction: SdkCompactionCoordinator
 	private sessionEvents: SdkSessionEventCoordinator
+	private localAiRecovery: LocalAiRecoveryCoordinator
 	private cloud!: SdkCloudSessionCoordinator
 	readonly cloudSessions: CloudSessionsService
 	readonly cloudTaskTarget: SdkCloudTaskTarget
@@ -758,6 +760,12 @@ export class Controller {
 			getWorkspaceRoot: () => this.getWorkspaceRoot(),
 			postStateToWebview: () => this.postStateToWebview(),
 		})
+		this.localAiRecovery = new LocalAiRecoveryCoordinator({
+			compactTask: () => this.compactTask(),
+			sendAskResponse: (prompt) => this.askResponse(prompt),
+			maxAttempts: 5,
+			windowMs: 3 * 60 * 1000,
+		})
 		this.sessionEvents = new SdkSessionEventCoordinator({
 			messageTranslatorState: this.messageTranslatorState,
 			sessions: this.sessions,
@@ -770,6 +778,9 @@ export class Controller {
 			getTurnPhase: () => this.turnStateTracker.currentPhase,
 			captureProviderApiError: (event) => this.captureProviderFailure(event),
 			beginProviderFailureTelemetryTurn: () => this.beginProviderFailureTelemetryTurn(),
+			onTurnErrorDetected: () => {
+				void this.localAiRecovery.handleTurnError()
+			},
 		})
 		// Subscribe to MCP tool list changes so we can restart the SDK session
 		// when servers are added/removed/reconnected. The SDK's DefaultSessionBuilder

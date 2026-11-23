@@ -1,5 +1,5 @@
 export interface WebviewMessage {
-	type: "grpc_request" | "grpc_request_cancel" | "studio_get_workspace_panes" | "studio_set_workspace_panes"
+	type: "grpc_request" | "grpc_request_cancel" | "studio_get_workspace_panes" | "studio_set_workspace_panes" | "studio_get_prompt_progress"
 	grpc_request?: GrpcRequest
 	grpc_request_cancel?: GrpcCancel
 	showExplorerAndEditor?: boolean

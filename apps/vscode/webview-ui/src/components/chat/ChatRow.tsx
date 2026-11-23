@@ -65,6 +65,7 @@ import SearchResultsDisplay from "./SearchResultsDisplay"
 import SubagentStatusRow from "./SubagentStatusRow"
 import { ThinkingRow } from "./ThinkingRow"
 import UserMessage from "./UserMessage"
+import { usePromptProgress } from "@/hooks/usePromptProgress"
 
 const HEADER_CLASSNAMES = "flex items-center gap-2.5 mb-3"
 
@@ -901,6 +902,10 @@ export const ChatRowContent = memo(
 					case "reasoning": {
 						const isReasoningStreaming = message.partial === true
 						const hasReasoningText = !!message.text?.trim()
+						const promptProgress = usePromptProgress(isReasoningStreaming)
+						const displayTitle = isReasoningStreaming
+							? (typeof promptProgress === "number" ? `Thinking... ${promptProgress}%` : "Thinking...")
+							: "Thinking"
 						// Show feature tips throughout the entire thinking/reasoning phase
 						const _showFeatureTip = isReasoningStreaming
 						return (
@@ -913,7 +918,7 @@ export const ChatRowContent = memo(
 									reasoningContent={message.text}
 									showChevron={!isReasoningStreaming || hasReasoningText}
 									showTitle={true}
-									title={isReasoningStreaming ? "Thinking..." : "Thinking"}
+									title={displayTitle}
 								/>
 								{isReasoningStreaming && showFeatureTips === true && <FeatureTip />}
 							</div>

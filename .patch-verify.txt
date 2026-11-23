@@ -1,0 +1,150 @@
+commit 6a75f2e469cdfb8230a8f3bbc87ef4dfc54c0e69
+Author: tiadiff <126512876+tiadiff@users.noreply.github.com>
+Date:   Mon Nov 23 00:56:29 2026 +0100
+
+    fix(webview): clamp context window progress and show token count during context compaction
+
+diff --git a/apps/vscode/src/sdk/message-translator.ts b/apps/vscode/src/sdk/message-translator.ts
+index e9d89df..4f38e05 100644
+--- a/apps/vscode/src/sdk/message-translator.ts
++++ b/apps/vscode/src/sdk/message-translator.ts
+@@ -1292,7 +1292,13 @@ export function parseCompactionNoticeMetadata(metadata: Record<string, unknown>
+ 	}
+ 	const mode = kind === "manual_compaction" ? "manual" : "auto"
+ 	if (metadata.phase === "started") {
+-		return { status: "started", mode }
++		return {
++			status: "started",
++			mode,
++			tokensBefore: asFiniteNumber(metadata.tokensBefore),
++			triggerTokens: asFiniteNumber(metadata.triggerTokens),
++			currentTokens: asFiniteNumber(metadata.currentTokens ?? metadata.tokensBefore ?? metadata.triggerTokens),
++		}
+ 	}
+ 	if (metadata.phase === "skipped") {
+ 		return { status: "skipped", mode }
+diff --git a/apps/vscode/src/shared/ExtensionMessage.ts b/apps/vscode/src/shared/ExtensionMessage.ts
+index e5f33b0..616d3d5 100644
+--- a/apps/vscode/src/shared/ExtensionMessage.ts
++++ b/apps/vscode/src/shared/ExtensionMessage.ts
+@@ -19,9 +19,10 @@ import { TelemetrySetting } from "./TelemetrySetting"
+ import { UserInfo } from "./UserInfo"
+ // webview will hold state
+ export interface ExtensionMessage {
+-	type: "grpc_response" | "studio_workspace_panes_state" // New type for gRPC responses & Studio layout sync
++	type: "grpc_response" | "studio_workspace_panes_state" | "studio_prompt_progress" // New type for gRPC responses & Studio layout sync
+ 	grpc_response?: GrpcResponse
+ 	showExplorerAndEditor?: boolean
++	promptProgress?: number | null
+ }
+ 
+ export type GrpcResponse = {
+@@ -410,6 +411,8 @@ export interface ClineCompactionInfo {
+ 	tokensAfter?: number
+ 	messagesBefore?: number
+ 	messagesAfter?: number
++	triggerTokens?: number
++	currentTokens?: number
+ }
+ 
+ /**
+diff --git a/apps/vscode/webview-ui/src/components/chat/CompactionRow.tsx b/apps/vscode/webview-ui/src/components/chat/CompactionRow.tsx
+index c5357ae..0c45b4f 100644
+--- a/apps/vscode/webview-ui/src/components/chat/CompactionRow.tsx
++++ b/apps/vscode/webview-ui/src/components/chat/CompactionRow.tsx
+@@ -1,5 +1,8 @@
+ import type { ClineCompactionInfo, ClineMessage } from "@shared/ExtensionMessage"
++import { getLastApiReqTotalTokens } from "@shared/getApiMetrics"
+ import { FoldVerticalIcon, LoaderCircleIcon } from "lucide-react"
++import { useMemo } from "react"
++import { useExtensionState } from "@/context/ExtensionStateContext"
+ import { cn } from "@/lib/utils"
+ 
+ /** Mirrors the CLI's formatTokenCount (apps/cli/src/tui/utils/compaction-status.ts). */
+@@ -29,9 +32,14 @@ function parseCompactionInfo(text: string | undefined): ClineCompactionInfo | un
+ }
+ 
+ /** Mirrors the CLI's formatCompactionDividerLabel wording for product consistency. */
+-function formatCompactionLabel(info: ClineCompactionInfo): string {
++function formatCompactionLabel(info: ClineCompactionInfo, lastApiReqTotalTokens?: number): string {
+ 	if (info.status === "started") {
+-		return info.mode === "manual" ? "Compacting context" : "Auto compacting context"
++		const label = info.mode === "manual" ? "Compacting context" : "Auto compacting context"
++		const count = info.tokensBefore ?? info.currentTokens ?? info.triggerTokens ?? lastApiReqTotalTokens
++		if (typeof count === "number" && count > 0) {
++			return `${label} (${formatTokenCount(count)} tokens)`
++		}
++		return label
+ 	}
+ 	if (info.status === "failed") {
+ 		return "Compaction failed"
+@@ -59,6 +67,8 @@ function formatCompactionLabel(info: ClineCompactionInfo): string {
+  * its terminal state when it finishes.
+  */
+ export const CompactionRow = ({ message }: { message: ClineMessage }) => {
++	const { clineMessages = [] } = useExtensionState()
++	const lastApiReqTotalTokens = useMemo(() => getLastApiReqTotalTokens(clineMessages) || undefined, [clineMessages])
+ 	const info = parseCompactionInfo(message.text)
+ 	if (!info) {
+ 		// Virtuoso cannot handle zero-height items; render a spacer instead of null.
+@@ -81,7 +91,7 @@ export const CompactionRow = ({ message }: { message: ClineMessage }) => {
+ 				<FoldVerticalIcon className="size-2 shrink-0" />
+ 			)}
+ 			<span className="min-w-0">
+-				{formatCompactionLabel(info)}
++				{formatCompactionLabel(info, lastApiReqTotalTokens)}
+ 				{inProgress ? "ÔÇª" : ""}
+ 			</span>
+ 			<div className="flex-1 min-w-4 border-t border-description/30" />
+diff --git a/apps/vscode/webview-ui/src/components/chat/task-header/ContextWindow.tsx b/apps/vscode/webview-ui/src/components/chat/task-header/ContextWindow.tsx
+index b663657..a48d20a 100644
+--- a/apps/vscode/webview-ui/src/components/chat/task-header/ContextWindow.tsx
++++ b/apps/vscode/webview-ui/src/components/chat/task-header/ContextWindow.tsx
+@@ -102,8 +102,10 @@ const ContextWindow: React.FC<ContextWindowProgressProps> = ({
+ 		if (!contextWindow) {
+ 			return null
+ 		}
++		const rawPercentage = (lastApiReqTotalTokens / contextWindow) * 100
+ 		return {
+-			percentage: (lastApiReqTotalTokens / contextWindow) * 100,
++			percentage: Math.min(100, Math.max(0, rawPercentage)),
++			rawPercentage,
+ 			max: contextWindow,
+ 			used: lastApiReqTotalTokens,
+ 		}
+diff --git a/apps/vscode/webview-ui/src/components/ui/progress.tsx b/apps/vscode/webview-ui/src/components/ui/progress.tsx
+index 0b56103..c0a4b9c 100644
+--- a/apps/vscode/webview-ui/src/components/ui/progress.tsx
++++ b/apps/vscode/webview-ui/src/components/ui/progress.tsx
+@@ -6,17 +6,20 @@ import { cn } from "@/lib/utils"
+ const Progress = React.forwardRef<
+ 	React.ElementRef<typeof ProgressPrimitive.Root>,
+ 	React.ComponentPropsWithoutRef<typeof ProgressPrimitive.Root>
+->(({ className, value, ...props }, ref) => (
+-	<ProgressPrimitive.Root
+-		className={cn("relative h-3 w-full overflow-hidden rounded-full bg-code-foreground/20", className)}
+-		ref={ref}
+-		{...props}>
+-		<ProgressPrimitive.Indicator
+-			className="h-full w-full flex-1 bg-code-foreground transition-all"
+-			style={{ transform: `translateX(-${100 - (value || 0)}%)` }}
+-		/>
+-	</ProgressPrimitive.Root>
+-))
++>(({ className, value, ...props }, ref) => {
++	const clampedValue = Math.min(100, Math.max(0, value || 0))
++	return (
++		<ProgressPrimitive.Root
++			className={cn("relative h-3 w-full overflow-hidden rounded-full bg-code-foreground/20", className)}
++			ref={ref}
++			{...props}>
++			<ProgressPrimitive.Indicator
++				className="h-full w-full flex-1 bg-code-foreground transition-all"
++				style={{ transform: `translateX(-${100 - clampedValue}%)` }}
++			/>
++		</ProgressPrimitive.Root>
++	)
++})
+ Progress.displayName = ProgressPrimitive.Root.displayName
+ 
+ export { Progress }

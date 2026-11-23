@@ -72,6 +72,19 @@ describe("refreshOpenAiModels", () => {
 		expect(mocks.axiosGet).toHaveBeenCalledWith("http://localhost:1234/v1/models", expect.anything())
 	})
 
+	it("filters out models flagged as disabled: true in upstream response", async () => {
+		mocks.readProviderConfig.mockReturnValue({ baseUrl: "http://localhost:1234/v1" })
+		mocks.axiosGet.mockResolvedValue({
+			data: {
+				data: [{ id: "model-active-1" }, { id: "model-disabled", disabled: true }, { id: "model-active-2" }],
+			},
+		})
+
+		const response = await refreshOpenAiModels(makeController(), OpenAiModelsRequest.create({ providerId: "openai" }))
+
+		expect(response.values).toEqual(["model-active-1", "model-active-2"])
+	})
+
 	it("returns an empty list when no base URL is configured", async () => {
 		mocks.readProviderConfig.mockReturnValue({})
 

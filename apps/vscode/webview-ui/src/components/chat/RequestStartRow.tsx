@@ -9,6 +9,7 @@ import { isApiReqAbsorbable, isLowStakesTool } from "./chat-view/utils/messageUt
 import ErrorRow from "./ErrorRow"
 import { ThinkingRow } from "./ThinkingRow"
 import { TypewriterText } from "./TypewriterText"
+import { usePromptProgress } from "@/hooks/usePromptProgress"
 
 interface RequestStartRowProps {
 	message: ClineMessage
@@ -217,6 +218,9 @@ export const RequestStartRow: React.FC<RequestStartRowProps> = ({
 	// Initial loading ("Thinking..." before any content) is injected as a synthetic in-list
 	// reasoning row in MessagesArea to avoid footer handoff flicker.
 
+	const isThinkingStreaming = reasoningContent ? !hasCost : false
+	const promptProgress = usePromptProgress(isThinkingStreaming)
+
 	return (
 		<div>
 			{apiReqState === "pre" && shouldShowActivities && (
@@ -239,7 +243,7 @@ export const RequestStartRow: React.FC<RequestStartRowProps> = ({
 					<div className="ml-1 pl-0 mb-1 -mt-1.25 pt-1">
 						<div className="inline-flex justify-baseline gap-0.5 text-left select-none px-0 w-full">
 							<span className="animate-shimmer bg-linear-90 from-foreground to-description bg-[length:200%_100%] bg-clip-text text-transparent text-[13px] leading-none">
-								Thinking...
+								{typeof promptProgress === "number" ? `Thinking... ${promptProgress}%` : "Thinking..."}
 							</span>
 						</div>
 					</div>
