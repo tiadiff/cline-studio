@@ -698,6 +698,7 @@ export function buildSummaryRequest(options: {
 }): string {
 	const parts: string[] = [
 		`Summarize this session for continuation. Be concise and factual.
+CRITICAL ANTI-LOOP RULE: If any command, package manager (e.g. chocolatey/choco/docker/zaproxy), or download URL repeatedly failed or was not recognized in the conversation, explicitly list that command/tool under "## Blocked" as UNAVAILABLE/FAILED and DO NOT suggest retrying or verifying it under "## Next". Instead, under "## Next", instruct the agent to use an alternative approach with already-installed local tools (e.g., Python scripts).
 
 ## Goal
 One sentence: what is being built or fixed.
@@ -705,13 +706,13 @@ One sentence: what is being built or fixed.
 ## State
 - Done: completed steps
 - In Progress: current work
-- Blocked: blockers or open questions
+- Blocked: blockers, unavailable tools/commands that failed, or open questions
 
 ## Highlights
 Key technical choices or notable findings (omit if none).
 
 ## Next
-Immediate next steps.
+Immediate next steps (must NOT repeat commands or tools that already failed).
 
 ## Files
 Read: ${options.fileOps.readFiles.join(", ") || "none"}

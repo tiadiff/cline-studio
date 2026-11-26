@@ -173,6 +173,10 @@ const BLOCKED_SUBCOMMANDS: Record<string, Set<string>> = {
 	dotnet: DOTNET_SUBCOMMANDS,
 	winget: WINGET_SUBCOMMANDS,
 	nuget: NUGET_SUBCOMMANDS,
+	choco: SYSTEM_PM_SUBCOMMANDS,
+	chocolatey: SYSTEM_PM_SUBCOMMANDS,
+	chocolety: SYSTEM_PM_SUBCOMMANDS,
+	scoop: SYSTEM_PM_SUBCOMMANDS,
 };
 
 /**
@@ -230,7 +234,7 @@ const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
  */
 function isAllowedRedirectTarget(rawTarget: string): boolean {
 	const target = rawTarget.replace(/["']/g, "");
-	if (/^(\/dev\/(null|stdout|stderr|tty)|nul:?)$/i.test(target)) {
+	if (/^(\/dev\/(null|stdout|stderr|tty)|nul:?|\$null)$/i.test(target)) {
 		return true;
 	}
 	if (target.includes("..")) {
@@ -430,9 +434,14 @@ function checkTokens(tokens: string[]): string | undefined {
 			(arg) =>
 				(!arg.startsWith("--") && /^-[A-Za-z]*[oO]/.test(arg)) ||
 				arg.startsWith("--output") ||
-				arg.startsWith("--remote-name"),
+				arg.startsWith("--remote-name") ||
+				/^-(?:outfile|o)$/i.test(arg),
 		);
 		return writesFile ? "`curl -o` (writes a file)" : undefined;
+	}
+	if (name === "invoke-webrequest" || name === "iwr") {
+		const writesFile = args.some((arg) => /^-(?:outfile|o)\b/i.test(arg));
+		return writesFile ? "`Invoke-WebRequest -OutFile` (writes a file)" : undefined;
 	}
 	if (name === "wget") {
 		const readOnly = args.some(

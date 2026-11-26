@@ -12,10 +12,32 @@ type HistoryPreviewProps = {
 }
 
 const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
-	const { taskHistory } = useExtensionState()
-	const previewItems = useMemo(() => taskHistory.filter((item) => item.ts && item.task).slice(0, 4), [taskHistory])
+	const { taskHistory, totalHistoryCost, totalHistoryCount } = useExtensionState()
+	const validTasks = useMemo(() => taskHistory.filter((item) => item.ts && item.task), [taskHistory])
+	const previewItems = useMemo(() => validTasks.slice(0, 4), [validTasks])
 	const resolvedCloudStatuses = useResolvedCloudStatuses(previewItems)
 	const isCostVisible = useUsageCostVisibility()
+
+	const conversationCount =
+		typeof totalHistoryCount === "number" && Number.isFinite(totalHistoryCount) ? totalHistoryCount : validTasks.length
+
+	const summedCost = useMemo(() => {
+		if (typeof totalHistoryCost === "number" && Number.isFinite(totalHistoryCost)) {
+			return totalHistoryCost
+		}
+		return validTasks.reduce((sum, item) => {
+			if (
+				item.totalCost != null &&
+				Number.isFinite(item.totalCost) &&
+				item.executionTarget !== "cloud" &&
+				isCostVisible(item.apiProvider)
+			) {
+				return sum + item.totalCost
+			}
+			return sum
+		}, 0)
+	}, [totalHistoryCost, validTasks, isCostVisible])
+
 	const handleHistorySelect = (id: string) => {
 		TaskServiceClient.showTaskWithId(StringRequest.create({ value: id })).catch((error) =>
 			console.error("Error showing task:", error),
@@ -32,21 +54,31 @@ const HistoryPreview = ({ showHistoryView }: HistoryPreviewProps) => {
 
 	return (
 		<div className="shrink-0 w-full mt-2">
-			<div className="flex items-center justify-between mb-2.5 px-0.5 select-none">
+			<div className="flex items-center justify-between gap-2 mb-2.5 px-0.5 select-none">
 				<div className="flex items-center gap-1.5 text-[#70767f]">
 					<ClockIcon size={12} strokeWidth={1.8} />
 					<span className="text-[11px] font-medium uppercase tracking-[0.09em]">Recent Sessions</span>
 				</div>
-				{taskHistory.filter((item) => item.ts && item.task).length > 0 && (
-					<button
-						aria-label="View all history"
-						className="inline-flex items-center gap-1 bg-transparent border-0 p-1 cursor-pointer text-[11.5px] font-medium text-[#7c828b] hover:text-[#eceef0] transition-colors"
-						onClick={() => showHistoryView()}
-						type="button">
-						View All
-						<ArrowRightIcon size={12} strokeWidth={1.8} />
-					</button>
-				)}
+				<div className="flex items-center gap-2">
+					{conversationCount > 0 && (
+						<span
+							className="px-2 py-0.5 rounded-md bg-white/[0.05] border border-white/[0.07] text-[#c8cdd4] font-geist-mono text-[10.5px] tabular-nums whitespace-nowrap"
+							data-testid="history-total-cost"
+							title={`Totale costi su ${conversationCount} conversazioni`}>
+							Totale: ${summedCost.toFixed(2)}
+						</span>
+					)}
+					{validTasks.length > 0 && (
+						<button
+							aria-label="View all history"
+							className="inline-flex items-center gap-1 bg-transparent border-0 p-1 cursor-pointer text-[11.5px] font-medium text-[#7c828b] hover:text-[#eceef0] transition-colors"
+							onClick={() => showHistoryView()}
+							type="button">
+							View All
+							<ArrowRightIcon size={12} strokeWidth={1.8} />
+						</button>
+					)}
+				</div>
 			</div>
 
 			<div className="flex flex-col gap-2">

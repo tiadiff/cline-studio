@@ -397,6 +397,8 @@ export class SessionRuntime {
 	private toolStartedAt = new Map<string, Date>();
 	/** Tool-call input snapshot for `ToolCallRecord.input`. */
 	private toolInputs = new Map<string, unknown>();
+	/** Tracks toolCallIds already inspected by `beforeTool` so `tool-started` does not double-count. */
+	private inspectedLoopToolCallIds = new Set<string>();
 	/**
 	 * Per-turn tool outcome counters used by the MistakeTracker wiring.
 	 * Reset on every `turn-started` event; consumed on `turn-finished`
@@ -918,6 +920,7 @@ export class SessionRuntime {
 		this.currentRunUsage = { inputTokens: 0, outputTokens: 0 };
 		this.toolStartedAt.clear();
 		this.toolInputs.clear();
+		this.inspectedLoopToolCallIds.clear();
 		this.currentTurnSuccessfulTools = 0;
 		this.currentTurnFailedTools = 0;
 		this.currentTurnFailureDetails = [];
@@ -1200,6 +1203,49 @@ export class SessionRuntime {
 			beforeTool: async (ctx) => {
 				const stopped = await trackerSettled();
 				if (stopped) return stopped;
+				if (
+					!this.trackerAbortInFlight &&
+					!this.loopDetectionDisabled &&
+					ctx?.toolCall?.toolName
+				) {
+					if (ctx.toolCall.toolCallId) {
+						this.inspectedLoopToolCallIds.add(ctx.toolCall.toolCallId);
+					}
+					const verdict = this.loopTracker.inspect({
+						name: ctx.toolCall.toolName,
+						input: ctx.input ?? ctx.toolCall.input,
+					});
+					if (verdict.kind === "hard") {
+						const stopMsg =
+							verdict.message ??
+							`Detected repeated tool calls to \`${ctx.toolCall.toolName}\`; stopping to avoid a loop.`;
+						this.enqueueMistakeRecord({
+							iteration: ctx.snapshot?.iteration ?? 0,
+							reason: "tool_execution_failed",
+							forceAtLimit: true,
+							details: stopMsg,
+						});
+						const afterHard = await trackerSettled();
+						if (afterHard) {
+							return {
+								...afterHard,
+								skip: true,
+								reason: stopMsg,
+							};
+						}
+						return {
+							skip: true,
+							reason: stopMsg,
+						};
+					}
+					if (verdict.kind === "soft" && verdict.message) {
+						return {
+							skip: true,
+							reason: `[LOOP PREVENTION BLOCK] ${verdict.message} This duplicate tool call was skipped before execution. You MUST change your strategy immediately and use a different tool or fallback approach.`,
+							appendContext: verdict.message,
+						};
+					}
+				}
 				return hooks.beforeTool?.(ctx);
 			},
 			afterTool: async (ctx) => {
@@ -1346,15 +1392,14 @@ export class SessionRuntime {
 			case "tool-started": {
 				this.toolStartedAt.set(event.toolCall.toolCallId, new Date());
 				this.toolInputs.set(event.toolCall.toolCallId, event.toolCall.input);
-				if (event.toolCall.execution) {
+				if (
+					event.toolCall.execution ||
+					this.inspectedLoopToolCallIds.has(event.toolCall.toolCallId)
+				) {
 					break;
 				}
-				// Loop-detection inspection: identical consecutive
-				// tool-call signatures trip the tracker. On "soft"
-				// verdict we append a recovery notice; on "hard"
-				// verdict we feed the mistake tracker with
-				// forceAtLimit:true and abort. Parity with pre-Step-9
-				// agent.ts L917-954.
+				// Fallback loop-detection inspection for runtimes/tests that emit
+				// `tool-started` directly without invoking `beforeTool`.
 				this.inspectLoopForToolCall(
 					event.toolCall.toolName,
 					event.toolCall.input,

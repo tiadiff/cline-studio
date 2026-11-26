@@ -73,15 +73,23 @@ export abstract class WebviewProvider {
 	 * rendered within the webview panel
 	 */
 	public getHtmlContent(): string {
+		let cacheBust = `${Date.now()}`
+		try {
+			const buildInfo = require("../../build-info.json")
+			if (buildInfo?.build) {
+				cacheBust = `${buildInfo.build}-${buildInfo.timestamp || Date.now()}`
+			}
+		} catch { }
+
 		// Get the local path to main script run in the webview,
 		// then convert it to a url we can use in the webview.
 		// The JS file from the React build output
-		const scriptUrl = this.getExtensionUrl("webview-ui", "build", "assets", "index.js")
+		const scriptUrl = `${this.getExtensionUrl("webview-ui", "build", "assets", "index.js")}?v=${encodeURIComponent(cacheBust)}`
 
 		// The CSS file from the React build output. The webview's own index.css
 		// @imports @vscode/codicons, so the codicon @font-face + codicon.ttf are
 		// bundled into these build assets — no separate codicons <link> needed.
-		const stylesUrl = this.getExtensionUrl("webview-ui", "build", "assets", "index.css")
+		const stylesUrl = `${this.getExtensionUrl("webview-ui", "build", "assets", "index.css")}?v=${encodeURIComponent(cacheBust)}`
 
 		// Use a nonce to only allow a specific script to be run.
 		/*

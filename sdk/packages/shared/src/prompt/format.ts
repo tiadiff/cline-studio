@@ -157,6 +157,11 @@ export function stripModeNotices(input?: string): string {
 	return removeTagElements(input, "mode_notice").trim();
 }
 
+export function stripOrchestratorEvaluations(input?: string): string {
+	if (!input?.trim()) return "";
+	return removeTagElements(input, "orchestrator_evaluation").trim();
+}
+
 // indexOf-based rather than a regex: a lazy dot-all pattern re-scans to the
 // end of the string from every unmatched opening tag, which is polynomial on
 // adversarial transcript content (CodeQL js/polynomial-redos).
@@ -177,7 +182,7 @@ function removeTagElements(input: string, tag: string): string {
 }
 
 export function formatDisplayUserInput(input?: string): string {
-	const normalized = stripModeNotices(normalizeUserInput(input));
+	const normalized = stripOrchestratorEvaluations(stripModeNotices(normalizeUserInput(input)));
 	const envelope = parseUserCommandEnvelope(input);
 	if (!envelope) {
 		return normalized;

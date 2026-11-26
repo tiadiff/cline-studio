@@ -55,13 +55,15 @@ export const OpenAICompatibleProvider = ({
 	// config (available only as a masked length), so there is no plaintext key
 	// to seed the model-refresh request with.
 	const legacyOpenAiApiKey = providerId === "openai" ? apiConfiguration?.openAiApiKey || "" : ""
-	const latestOpenAiBaseUrlRef = useRef(config?.baseUrl || "")
+	const isOpenAiProvider = providerId === "openai" || providerId === "openai-compatible"
+	const effectiveBaseUrl = config?.baseUrl || (isOpenAiProvider && config !== undefined ? apiConfiguration?.openAiBaseUrl : undefined) || ""
+	const latestOpenAiBaseUrlRef = useRef(effectiveBaseUrl)
 	const latestOpenAiApiKeyRef = useRef(legacyOpenAiApiKey)
 	const openAiModelsRequestRef = useRef(0)
 
 	useEffect(() => {
-		latestOpenAiBaseUrlRef.current = config?.baseUrl || ""
-	}, [config?.baseUrl])
+		latestOpenAiBaseUrlRef.current = effectiveBaseUrl
+	}, [effectiveBaseUrl])
 
 	useEffect(() => {
 		latestOpenAiApiKeyRef.current = legacyOpenAiApiKey
@@ -75,7 +77,6 @@ export const OpenAICompatibleProvider = ({
 	// fields; custom/unknown providers persist via their per-provider committed
 	// selection. Prefer the committed selection and fall back to the legacy
 	// fields so the built-in provider keeps working unchanged.
-	const isOpenAiProvider = providerId === "openai" || providerId === "openai-compatible"
 	const { selectedModelId: legacySelectedModelId, selectedModelInfo: legacySelectedModelInfo } = useDynamicProviderSelection(
 		providerId,
 		apiConfiguration,
@@ -268,8 +269,21 @@ export const OpenAICompatibleProvider = ({
 	)
 
 	useEffect(() => {
-		void refreshOpenAiModels(config?.baseUrl, latestOpenAiApiKeyRef.current)
-	}, [config?.baseUrl, refreshOpenAiModels])
+		void refreshOpenAiModels(effectiveBaseUrl, latestOpenAiApiKeyRef.current)
+	}, [effectiveBaseUrl, refreshOpenAiModels])
+
+	useEffect(() => {
+		if (availableOpenAiModels.length > 0 || !effectiveBaseUrl) {
+			return
+		}
+		const handleFocus = () => {
+			if (!document.hidden && latestOpenAiBaseUrlRef.current) {
+				void refreshOpenAiModels(latestOpenAiBaseUrlRef.current, latestOpenAiApiKeyRef.current)
+			}
+		}
+		window.addEventListener("focus", handleFocus)
+		return () => window.removeEventListener("focus", handleFocus)
+	}, [availableOpenAiModels.length, effectiveBaseUrl, refreshOpenAiModels])
 
 	const handleOpenAiModelSelection = useCallback(
 		(modelId: string) => {

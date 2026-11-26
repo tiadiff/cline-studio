@@ -1,8 +1,8 @@
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 import type { ClineCoreListHistoryOptions, SessionHistoryRecord } from "@cline/core"
 import type { MessageWithMetadata as SdkMessage } from "@cline/llms"
-import { formatDisplayUserInput, parseUserInputMode } from "@cline/shared"
+import { formatDisplayUserInput, normalizeUserInput, parseUserInputMode, stripModeNotices } from "@cline/shared"
 import { resolveSessionDataDir } from "@cline/shared/storage"
 import type { ClineMessage } from "@shared/ExtensionMessage"
 import type { HistoryItem } from "@shared/HistoryItem"
@@ -16,6 +16,7 @@ import {
 	legacyApiHistoryToSdkMessages,
 	mergeLegacyUiMessagesWithResumedSdkMessages,
 } from "./legacy-task-handling"
+import type { PersistedOrchestratorCard } from "./local-ai-orchestrator-coordinator"
 import type { MessageIdMinter } from "./message-id-minter"
 import { sdkMessagesToClineMessages } from "./message-translator"
 import type { SdkSessionLifecycle } from "./sdk-session-lifecycle"
@@ -117,7 +118,7 @@ export function historyItemToSessionMetadata(item: HistoryItem, fallbackModelId?
 
 function historyItemToSessionHistoryRecord(item: HistoryItem): SessionHistoryRecord {
 	const startedAt = new Date(item.ts || Date.now()).toISOString()
-	const displayTask = formatDisplayUserInput(item.task)
+	const displayTask = stripOrchestratorEvaluationBlock(formatDisplayUserInput(item.task))
 	return {
 		sessionId: item.id,
 		source: "vscode",
@@ -144,8 +145,53 @@ function historyItemToSessionHistoryRecord(item: HistoryItem): SessionHistoryRec
 	}
 }
 
-/** SdkMessage plus the plan/act mode recovered from its <user_input mode="..."> wrapper. */
-type SdkDisplayMessage = SdkMessage & { uiMode?: "plan" | "act" | "yolo" }
+/** SdkMessage plus the plan/act mode and orchestrator metadata recovered before display sanitization. */
+type SdkDisplayMessage = SdkMessage & {
+	uiMode?: "plan" | "act" | "yolo"
+	orchestratorEvaluation?: string
+	orchestratorPlanFeedback?: string
+}
+
+function extractRawUserText(content: SdkMessage["content"]): string {
+	if (typeof content === "string") {
+		return content
+	}
+	if (Array.isArray(content)) {
+		return content
+			.filter((block): block is Extract<typeof block, { type: "text" }> => block.type === "text" && typeof block.text === "string")
+			.map((block) => block.text)
+			.join("\n")
+	}
+	return ""
+}
+
+function extractOrchestratorEvaluation(content: SdkMessage["content"]): string | undefined {
+	const raw = extractRawUserText(content)
+	if (!raw) {
+		return undefined
+	}
+	const openTag = "<orchestrator_evaluation>"
+	const closeTag = "</orchestrator_evaluation>"
+	const start = raw.indexOf(openTag)
+	if (start === -1) {
+		return undefined
+	}
+	const end = raw.indexOf(closeTag, start + openTag.length)
+	const body = (end === -1 ? raw.slice(start + openTag.length) : raw.slice(start + openTag.length, end)).trim()
+	return body || undefined
+}
+
+function extractOrchestratorPlanFeedback(content: SdkMessage["content"]): string | undefined {
+	const raw = extractRawUserText(content)
+	if (!raw) {
+		return undefined
+	}
+	const normalized = stripModeNotices(normalizeUserInput(raw)).trim()
+	if (normalized.startsWith("[ORCHESTRATOR PLAN FEEDBACK]")) {
+		return normalized
+	}
+	return undefined
+}
 
 function parseUserMessageMode(content: SdkMessage["content"]): "plan" | "act" | "yolo" | undefined {
 	if (typeof content === "string") {
@@ -166,9 +212,26 @@ function parseUserMessageMode(content: SdkMessage["content"]): "plan" | "act" | 
 export function sdkMessagesToDisplayClineMessages(
 	messages: SdkMessage[],
 	minter: MessageIdMinter | undefined,
-	options: { finalTurnCompleted: boolean; cwd?: string },
+	options: { finalTurnCompleted: boolean; cwd?: string; persistedOrchestratorCards?: PersistedOrchestratorCard[] },
 ): ClineMessage[] {
 	return sdkMessagesToClineMessages(sanitizeSdkUserMessagesForDisplay(messages), minter, options)
+}
+
+function stripOrchestratorEvaluationBlock(text: string): string {
+	const openTag = "<orchestrator_evaluation>"
+	const closeTag = "</orchestrator_evaluation>"
+	let result = text
+	let start = result.indexOf(openTag)
+	while (start !== -1) {
+		const end = result.indexOf(closeTag, start + openTag.length)
+		if (end === -1) {
+			result = result.slice(0, start)
+			break
+		}
+		result = result.slice(0, start) + result.slice(end + closeTag.length)
+		start = result.indexOf(openTag, start)
+	}
+	return result.trim()
 }
 
 function sanitizeSdkUserMessagesForDisplay(messages: SdkMessage[]): SdkDisplayMessage[] {
@@ -176,21 +239,31 @@ function sanitizeSdkUserMessagesForDisplay(messages: SdkMessage[]): SdkDisplayMe
 		if (message.role !== "user") {
 			return message
 		}
-		// Recover the mode BEFORE display sanitization strips the <user_input mode="..."> wrapper;
-		// history rendering uses it to style each turn's inferred completion row.
+		// Recover the mode and orchestrator metadata BEFORE display sanitization strips them;
+		// history rendering uses them to style each turn's inferred completion row and supervisor box.
 		const uiMode = parseUserMessageMode(message.content)
+		const orchestratorEvaluation = extractOrchestratorEvaluation(message.content)
+		const orchestratorPlanFeedback = extractOrchestratorPlanFeedback(message.content)
 		if (typeof message.content === "string") {
-			return { ...message, content: formatDisplayUserInput(message.content), uiMode }
+			return {
+				...message,
+				content: stripOrchestratorEvaluationBlock(formatDisplayUserInput(message.content)),
+				uiMode,
+				...(orchestratorEvaluation ? { orchestratorEvaluation } : {}),
+				...(orchestratorPlanFeedback ? { orchestratorPlanFeedback } : {}),
+			}
 		}
 		if (Array.isArray(message.content)) {
 			return {
 				...message,
 				content: message.content.map((block) =>
 					block.type === "text" && typeof block.text === "string"
-						? { ...block, text: formatDisplayUserInput(block.text) }
+						? { ...block, text: stripOrchestratorEvaluationBlock(formatDisplayUserInput(block.text)) }
 						: block,
 				),
 				uiMode,
+				...(orchestratorEvaluation ? { orchestratorEvaluation } : {}),
+				...(orchestratorPlanFeedback ? { orchestratorPlanFeedback } : {}),
 			}
 		}
 		return message
@@ -202,7 +275,7 @@ export function sessionHistoryRecordToHistoryItem(item: SessionHistoryRecord): H
 	return {
 		id: item.sessionId,
 		ts: dateStringToTimestamp(item.updatedAt ?? item.endedAt ?? item.startedAt),
-		task: formatDisplayUserInput(metadataString(metadata, "title") ?? item.prompt ?? ""),
+		task: stripOrchestratorEvaluationBlock(formatDisplayUserInput(metadataString(metadata, "title") ?? item.prompt ?? "")),
 		tokensIn: metadataNumber(metadata, "tokensIn") ?? 0,
 		tokensOut: metadataNumber(metadata, "tokensOut") ?? 0,
 		cacheWrites: metadataNumber(metadata, "cacheWrites") ?? 0,
@@ -511,6 +584,7 @@ export class SdkTaskHistory {
 		}
 
 		const sdkMessages = await this.withHistoryHost((host) => host.readMessages(taskId) as Promise<SdkMessage[]>)
+		const persistedOrchestratorCards = this.readPersistedOrchestratorCards(taskId, sdkRecord)
 		const clineMessages = sdkMessagesToClineMessages(
 			sanitizeSdkUserMessagesForDisplay(sdkMessages),
 			this.options.getMinter?.(),
@@ -528,12 +602,40 @@ export class SdkTaskHistory {
 				finalTurnCompleted: sdkRecord?.status === "completed",
 				// Relativize the absolute tool paths for display, same as the live path.
 				cwd: sdkRecord?.cwd || sdkRecord?.workspaceRoot || undefined,
+				persistedOrchestratorCards,
 			},
 		)
 		if (sdkRecord && legacyTask) {
 			return mergeLegacyUiMessagesWithResumedSdkMessages(readUiMessages(taskId, legacyTask.dataDir), clineMessages)
 		}
 		return clineMessages
+	}
+
+	private readPersistedOrchestratorCards(
+		taskId: string,
+		sdkRecord?: SessionHistoryRecord,
+	): PersistedOrchestratorCard[] | undefined {
+		try {
+			const messagesPath = typeof sdkRecord?.messagesPath === "string" ? sdkRecord.messagesPath.trim() : ""
+			const sessionDir = messagesPath ? path.dirname(messagesPath) : path.join(resolveSessionDataDir(), taskId)
+			const filePath = path.join(sessionDir, `${taskId}.orchestrator.json`)
+			if (!existsSync(filePath)) {
+				return undefined
+			}
+			const parsed = JSON.parse(readFileSync(filePath, "utf8")) as { cards?: PersistedOrchestratorCard[] }
+			if (Array.isArray(parsed?.cards) && parsed.cards.length > 0) {
+				return parsed.cards.filter(
+					(c) =>
+						c &&
+						typeof c.text === "string" &&
+						c.text.trim().length > 0 &&
+						(c.phase === "prompt" || c.phase === "plan" || c.phase === "act"),
+				)
+			}
+		} catch (error) {
+			Logger.warn(`[SdkTaskHistory] Failed to read persisted orchestrator cards for ${taskId}:`, error)
+		}
+		return undefined
 	}
 
 	/**

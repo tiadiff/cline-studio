@@ -27,6 +27,55 @@ import {
 import { generateSummary } from "./summary-generation";
 
 const MIN_AGENTIC_SUMMARY_INPUT_TOKENS = 1_024;
+const MANUAL_COMPACTION_MAX_PRESERVE_RECENT_TOKENS = 4_000;
+
+/**
+ * Strips consecutive/repeated identical assistant tool-call turns from the preserved tail
+ * during compaction so a repeated tool loop does not survive compaction verbatim and
+ * re-poison the model's context window.
+ */
+function deduplicateRepeatedToolTurnsInTail(
+	tailMessages: CoreCompactionContext["messages"],
+): CoreCompactionContext["messages"] {
+	if (tailMessages.length < 4) {
+		return tailMessages;
+	}
+	const seenToolSignatures = new Map<string, number>();
+	const droppedToolUseIds = new Set<string>();
+	const filtered: CoreCompactionContext["messages"] = [];
+
+	for (const msg of tailMessages) {
+		if (msg.role === "assistant" && Array.isArray(msg.content)) {
+			const toolUses = msg.content.filter((b) => b.type === "tool_use");
+			if (toolUses.length === 1) {
+				const tu = toolUses[0];
+				const sig = `${tu.name}:${JSON.stringify(tu.input ?? {})}`
+					.replace(/\bchocolety\b/gi, "chocolatey")
+					.toLowerCase();
+				const count = (seenToolSignatures.get(sig) ?? 0) + 1;
+				seenToolSignatures.set(sig, count);
+				if (count >= 2) {
+					droppedToolUseIds.add(tu.id);
+					continue;
+				}
+			}
+		} else if (msg.role === "user" && Array.isArray(msg.content)) {
+			const remainingBlocks = msg.content.filter(
+				(b) =>
+					!(b.type === "tool_result" && droppedToolUseIds.has(b.tool_use_id)),
+			);
+			if (remainingBlocks.length === 0) {
+				continue;
+			}
+			if (remainingBlocks.length !== msg.content.length) {
+				filtered.push({ ...msg, content: remainingBlocks });
+				continue;
+			}
+		}
+		filtered.push(msg);
+	}
+	return filtered;
+}
 
 export function buildAgenticSummaryInputBudget(options: {
 	messages: CoreCompactionContext["messages"];
@@ -62,9 +111,18 @@ export async function runAgenticCompaction(options: {
 		return undefined;
 	}
 
+	const effectivePreserveRecentTokens =
+		options.context.mode === "manual"
+			? Math.min(
+					options.preserveRecentTokens,
+					MANUAL_COMPACTION_MAX_PRESERVE_RECENT_TOKENS,
+					Math.max(1_500, Math.floor(options.context.budget.messages.inputTokens * 0.25)),
+				)
+			: options.preserveRecentTokens;
+
 	const cutIndex = findCutIndex(
 		messages,
-		options.preserveRecentTokens,
+		effectivePreserveRecentTokens,
 		options.estimateMessageTokens,
 	);
 	if (cutIndex <= 0 || cutIndex >= messages.length) {
@@ -224,6 +282,10 @@ export async function runAgenticCompaction(options: {
 		(total, message) => total + options.estimateMessageTokens(message),
 		0,
 	);
+	const preservedTail =
+		options.context.mode === "manual"
+			? deduplicateRepeatedToolTurnsInTail(messages.slice(cutIndex))
+			: messages.slice(cutIndex);
 	const resultMessages = [
 		buildSummaryMessage({
 			summary,
@@ -231,7 +293,7 @@ export async function runAgenticCompaction(options: {
 			tokensBefore,
 			userRunSpan: countUserRunMessages(messagesToSummarize),
 		}),
-		...messages.slice(cutIndex),
+		...preservedTail,
 	];
 	const tokensAfter = resultMessages.reduce(
 		(total, message) => total + options.estimateMessageTokens(message),

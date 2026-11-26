@@ -220,7 +220,7 @@ describe("SdkTaskHistory", () => {
 		})
 	})
 
-	it("retags only the final turn's text, styled by the mode recovered from user_input wrappers", async () => {
+	it("retags completed plan turns and the final turn's text, styled by the mode recovered from user_input wrappers", async () => {
 		const { history, readMessages } = makeHistory([makeSessionRecord("task-1")])
 		readMessages.mockResolvedValueOnce([
 			{ role: "user", content: '<user_input mode="plan">plan the feature</user_input>' },
@@ -232,11 +232,8 @@ describe("SdkTaskHistory", () => {
 		const result = await history.getClineMessages("task-1")
 
 		expect(result).toMatchObject([
-			// The <user_input mode="..."> wrapper is stripped for display but its mode
-			// styles the final turn's inferred completion row. Mid-transcript turns stay
-			// plain — history has no per-turn outcome to trust.
 			{ type: "say", say: "task", text: "plan the feature" },
-			{ type: "say", say: "text", text: "Here is the plan." },
+			{ type: "say", say: "plan_completion_result", text: "Here is the plan." },
 			{ type: "say", say: "user_feedback", text: "looks good, do it" },
 			{ type: "say", say: "completion_result", text: "Implemented." },
 			{ type: "ask", ask: "completion_result" },
@@ -282,6 +279,48 @@ describe("SdkTaskHistory", () => {
 		// The hidden prompt still carries the turn's mode: the final completion row
 		// must render as an act-mode completion, not a plan box.
 		expect(result).toContainEqual(expect.objectContaining({ type: "say", say: "completion_result", text: "Implemented." }))
+	})
+
+	it("reconstructs Plan Mode completion boxes and Orchestrator Supervisor cards when rehydrating supervised sessions", async () => {
+		const { history, readMessages } = makeHistory([makeSessionRecord("task-1")])
+		readMessages.mockResolvedValueOnce([
+			{
+				role: "user",
+				content:
+					'<user_input mode="plan">implement jwt login\n\n<orchestrator_evaluation>\nExpanded Technical Objective: Implement JWT authentication endpoint.\nDirective: Inspect auth routes and propose plan.\nKey Requirements:\n1. Create POST /api/login.\n2. Validate JWT middleware.\n</orchestrator_evaluation></user_input>',
+			},
+			{ role: "assistant", content: [{ type: "text", text: "## Plan\n1. Add login route\n2. Add middleware" }] },
+			{
+				role: "user",
+				content:
+					'<user_input mode="act"><mode_notice>The user switched from plan mode to act mode before sending this message.</mode_notice>The user approved switching to act mode. Continue with the approved plan now.</user_input>',
+			},
+			{ role: "assistant", content: [{ type: "text", text: "JWT login implemented." }] },
+		] as never)
+
+		const result = await history.getClineMessages("task-1")
+
+		expect(result[0]).toMatchObject({ type: "say", say: "task", text: "implement jwt login" })
+		expect(result[1]).toMatchObject({
+			type: "say",
+			say: "info",
+			text: expect.stringContaining("TECHNICAL SPECIFICATION READY FOR PLAN MODE"),
+		})
+		expect(result[2]).toMatchObject({
+			type: "say",
+			say: "plan_completion_result",
+			text: "## Plan\n1. Add login route\n2. Add middleware",
+		})
+		expect(result[3]).toMatchObject({
+			type: "say",
+			say: "info",
+			text: expect.stringContaining("PLAN APPROVED BY SUPERVISOR"),
+		})
+		expect(result[4]).toMatchObject({
+			type: "say",
+			say: "completion_result",
+			text: "JWT login implemented.",
+		})
 	})
 
 	it("hides [TASK RESUMPTION] prompts when rehydrating from history", async () => {
@@ -570,7 +609,7 @@ describe("SdkTaskHistory", () => {
 			isCloudSessionId: (id: string) => id.startsWith("ses-"),
 			list: vi.fn(async () => [cloudRecord]),
 			find: vi.fn(async (id: string) => (id === cloudRecord.sessionId ? cloudRecord : undefined)),
-			delete: vi.fn(async () => {}),
+			delete: vi.fn(async () => { }),
 		}
 		const { history, deleteSession } = makeHistory([makeSessionRecord("sdk-task")], undefined, undefined, cloud)
 
@@ -962,10 +1001,10 @@ function makeHistory(
 			currentRecords = currentRecords.map((record) =>
 				record.sessionId === sessionId
 					? {
-							...record,
-							prompt: updates.prompt ?? record.prompt,
-							metadata: updates.metadata ?? record.metadata,
-						}
+						...record,
+						prompt: updates.prompt ?? record.prompt,
+						metadata: updates.metadata ?? record.metadata,
+					}
 					: record,
 			)
 			return { updated: true }

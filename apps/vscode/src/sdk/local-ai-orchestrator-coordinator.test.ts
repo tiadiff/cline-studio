@@ -7,9 +7,12 @@ import {
 
 describe("LocalAiOrchestratorCoordinator", () => {
 	let emittedMessages: ClineMessage[]
-	let triggerActMode: ReturnType<typeof vi.fn>
-	let sendPlanRevisionPrompt: ReturnType<typeof vi.fn>
-	let postStateToWebview: ReturnType<typeof vi.fn>
+	let triggerActMode: () => Promise<void>
+	let sendPlanRevisionPrompt: (prompt: string) => Promise<void>
+	let postStateToWebview: () => Promise<void>
+	let triggerActModeMock: ReturnType<typeof vi.fn>
+	let sendPlanRevisionPromptMock: ReturnType<typeof vi.fn>
+	let postStateToWebviewMock: ReturnType<typeof vi.fn>
 	let currentMode: "plan" | "act"
 	let clineMessages: ClineMessage[]
 	let planModelId: string
@@ -17,9 +20,12 @@ describe("LocalAiOrchestratorCoordinator", () => {
 
 	beforeEach(() => {
 		emittedMessages = []
-		triggerActMode = vi.fn().mockResolvedValue(undefined)
-		sendPlanRevisionPrompt = vi.fn().mockResolvedValue(undefined)
-		postStateToWebview = vi.fn().mockResolvedValue(undefined)
+		triggerActModeMock = vi.fn().mockResolvedValue(undefined)
+		sendPlanRevisionPromptMock = vi.fn().mockResolvedValue(undefined)
+		postStateToWebviewMock = vi.fn().mockResolvedValue(undefined)
+		triggerActMode = () => triggerActModeMock()
+		sendPlanRevisionPrompt = (prompt: string) => sendPlanRevisionPromptMock(prompt)
+		postStateToWebview = () => postStateToWebviewMock()
 		currentMode = "plan"
 		clineMessages = []
 		planModelId = "Qwen3.6-27B-CoderX-48K-115toks"
@@ -61,13 +67,13 @@ describe("LocalAiOrchestratorCoordinator", () => {
 			"Qwen3.6-27B-CoderX-48K-115toks",
 			"Qwen3.6-27B-CoderX-32K-125toks",
 		])
-		expect(chosen).toBe("Gemma4-12B-Agentic-47toks")
+		expect(chosen).toBe("Qwen3.6-35B-Coding-Avanzato-60toks")
 		expect(chosen).not.toBe(planModelId)
 		expect(chosen).not.toBe(actModelId)
 
-		// If the user switches Plan Mode to Gemma4-12B-Agentic-47toks,
-		// the orchestrator automatically shifts to Qwen3.6-35B-Coding-Avanzato-60toks!
-		planModelId = "Gemma4-12B-Agentic-47toks"
+		// If the user switches Plan Mode to Qwen3.6-35B-Coding-Avanzato-60toks,
+		// the orchestrator automatically shifts to Inkling-2-Mini-26B-32K-50toks!
+		planModelId = "Qwen3.6-35B-Coding-Avanzato-60toks"
 		actModelId = "Qwen3.6-27B-CoderX-48K-115toks"
 		const chosen2 = coordinator.resolveOrchestratorModelIdSync([
 			"Gemma4-12B-Agentic-47toks",
@@ -76,7 +82,7 @@ describe("LocalAiOrchestratorCoordinator", () => {
 			"Qwen3.6-27B-CoderX-48K-115toks",
 			"TwIL-8B-Reasoning-96K-80toks",
 		])
-		expect(chosen2).toBe("Qwen3.6-35B-Coding-Avanzato-60toks")
+		expect(chosen2).toBe("TwIL-8B-Reasoning-96K-80toks")
 		expect(chosen2).not.toBe(planModelId)
 		expect(chosen2).not.toBe(actModelId)
 	})
@@ -128,7 +134,7 @@ describe("LocalAiOrchestratorCoordinator", () => {
 		expect(result).toContain("Creare un endpoint REST di autenticazione JWT")
 		expect(result).toContain("Endpoint POST /api/login")
 		expect(emittedMessages.length).toBeGreaterThanOrEqual(2)
-		expect(emittedMessages[emittedMessages.length - 1].text).toContain("Specifica Tecnica & Valutazione Prompt")
+		expect(emittedMessages[emittedMessages.length - 1].text).toContain("TECHNICAL SPECIFICATION READY FOR PLAN MODE")
 	})
 
 	it("reads Plan Mode response, validates it against initial prompt, and automatically triggers Act Mode when valid", async () => {
@@ -170,9 +176,9 @@ describe("LocalAiOrchestratorCoordinator", () => {
 
 		await coordinator.handlePlanTurnCompleted()
 
-		expect(triggerActMode).toHaveBeenCalledTimes(1)
-		expect(sendPlanRevisionPrompt).not.toHaveBeenCalled()
-		expect(emittedMessages[emittedMessages.length - 1].text).toContain("Plan Valido e Approvato")
+		expect(triggerActModeMock).toHaveBeenCalledTimes(1)
+		expect(sendPlanRevisionPromptMock).not.toHaveBeenCalled()
+		expect(emittedMessages[emittedMessages.length - 1].text).toContain("PLAN APPROVED BY SUPERVISOR")
 	})
 
 	it("suggests appropriate modifications and stays in Plan Mode when the received Plan is incomplete or invalid", async () => {
@@ -217,12 +223,12 @@ describe("LocalAiOrchestratorCoordinator", () => {
 
 		await coordinator.handlePlanTurnCompleted()
 
-		expect(triggerActMode).not.toHaveBeenCalled()
-		expect(sendPlanRevisionPrompt).toHaveBeenCalledTimes(1)
-		const sentRevision = sendPlanRevisionPrompt.mock.calls[0][0] as string
+		expect(triggerActModeMock).not.toHaveBeenCalled()
+		expect(sendPlanRevisionPromptMock).toHaveBeenCalledTimes(1)
+		const sentRevision = sendPlanRevisionPromptMock.mock.calls[0][0] as string
 		expect(sentRevision).toContain(ORCHESTRATOR_REVISION_PREFIX)
 		expect(sentRevision).toContain("Aggiungere il middleware di verifica del token JWT")
-		expect(emittedMessages[emittedMessages.length - 1].text).toContain("Plan da Correggere")
+		expect(emittedMessages[emittedMessages.length - 1].text).toContain("PLAN NEEDS REVISION")
 	})
 
 	it("when max revisions limit is reached, triggers Act mode if the imperfect plan is acceptable as a fallback", async () => {
@@ -271,9 +277,9 @@ describe("LocalAiOrchestratorCoordinator", () => {
 
 		// Since planRevisionCount became 3 (> maxPlanRevisions 2) and isAcceptableFallback is true,
 		// it should trigger Act mode!
-		expect(triggerActMode).toHaveBeenCalledTimes(1)
-		expect(sendPlanRevisionPrompt).not.toHaveBeenCalled()
-		expect(emittedMessages[emittedMessages.length - 1].text).toContain("Plan Accettato con Riserva")
+		expect(triggerActModeMock).toHaveBeenCalledTimes(1)
+		expect(sendPlanRevisionPromptMock).not.toHaveBeenCalled()
+		expect(emittedMessages[emittedMessages.length - 1].text).toContain("PLAN ACCEPTED WITH RESERVATIONS")
 	})
 
 	it("when max revisions limit is reached, halts and waits for user if the plan is critically flawed", async () => {
@@ -320,8 +326,53 @@ describe("LocalAiOrchestratorCoordinator", () => {
 		await coordinator.handlePlanTurnCompleted()
 
 		// Must NOT trigger Act mode and must halt for user
-		expect(triggerActMode).not.toHaveBeenCalled()
-		expect(sendPlanRevisionPrompt).not.toHaveBeenCalled()
-		expect(emittedMessages[emittedMessages.length - 1].text).toContain("Richiesto Intervento Utente")
+		expect(triggerActModeMock).not.toHaveBeenCalled()
+		expect(sendPlanRevisionPromptMock).not.toHaveBeenCalled()
+		expect(emittedMessages[emittedMessages.length - 1].text).toContain("PLAN BLOCKED — USER INTERVENTION REQUIRED")
+	})
+
+	it("checks completed Act work and proposes next modification for Plan mode", async () => {
+		global.fetch = vi.fn().mockImplementation(async (url: string) => {
+			if (String(url).endsWith("/chat/completions")) {
+				return {
+					ok: true,
+					json: async () => ({
+						choices: [
+							{
+								message: {
+									content: JSON.stringify({
+										completed: true,
+										score: 9,
+										summary: "Endpoint di login creato e test di autenticazione completati con successo.",
+										verifiedPoints: ["Creato auth router", "Aggiunto JWT middleware"],
+										issuesOrPending: [],
+										proposedNextAction: "Aggiungere endpoint di refresh token e logout.",
+									}),
+								},
+							},
+						],
+					}),
+				}
+			}
+			return { ok: true, json: async () => ({ data: [{ id: "Qwen3.6-35B-Coding-Avanzato-60toks" }] }) }
+		}) as any
+
+		const coordinator = createCoordinator(true)
+		currentMode = "act"
+		clineMessages = [
+			{ ts: 100, type: "say", say: "task", text: "Crea un endpoint di login", partial: false },
+			{
+				ts: 300,
+				type: "say",
+				say: "completion_result",
+				text: "Ho implementato l'endpoint di login con successo.",
+				partial: false,
+			},
+		]
+
+		await coordinator.handleTurnCompleted()
+
+		expect(emittedMessages[emittedMessages.length - 1].text).toContain("ACT WORK VERIFIED AND COMPLETED")
+		expect(emittedMessages[emittedMessages.length - 1].text).toContain("Aggiungere endpoint di refresh token e logout")
 	})
 })

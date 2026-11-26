@@ -3,6 +3,7 @@ import { Logger } from "@/shared/services/Logger"
 export interface LocalAiRecoveryOptions {
 	freeVramUrl?: string
 	maxAttempts?: number
+	maxLoopRecoveryAttempts?: number
 	windowMs?: number
 	compactTask: () => Promise<void>
 	sendAskResponse: (prompt: string) => Promise<void>
@@ -17,18 +18,22 @@ export interface LocalAiRecoveryOptions {
  * 2. Condenses / compacts context window (compactTask)
  * 3. Sends prompt "compact context and resume task" to seamlessly resume the job
  *
- * Enforces rate limiting: max 5 recovery attempts in a sliding 3-minute window.
+ * Enforces rate limiting: max 5 recovery attempts in a sliding 3-minute window
+ * (and max 1 recovery attempt for repeated tool-call loop aborts so loops do not cascade).
  */
 export class LocalAiRecoveryCoordinator {
 	private readonly freeVramUrl: string
 	private readonly maxAttempts: number
+	private readonly maxLoopRecoveryAttempts: number
 	private readonly windowMs: number
 	private attemptTimestamps: number[] = []
+	private loopAttemptTimestamps: number[] = []
 	private isRecovering = false
 
 	constructor(private readonly options: LocalAiRecoveryOptions) {
 		this.freeVramUrl = options.freeVramUrl ?? "http://127.0.0.1:8080/_localai/free-vram"
 		this.maxAttempts = options.maxAttempts ?? 5
+		this.maxLoopRecoveryAttempts = options.maxLoopRecoveryAttempts ?? 1
 		this.windowMs = options.windowMs ?? 3 * 60 * 1000 // 3 minutes
 	}
 
@@ -45,6 +50,20 @@ export class LocalAiRecoveryCoordinator {
 		const now = Date.now()
 		// Clean up attempts outside sliding window (3 minutes)
 		this.attemptTimestamps = this.attemptTimestamps.filter((ts) => now - ts < this.windowMs)
+		this.loopAttemptTimestamps = this.loopAttemptTimestamps.filter((ts) => now - ts < this.windowMs)
+
+		const isLoopAbort = Boolean(
+			customPrompt &&
+				(customPrompt.includes("consecutive identical calls") ||
+					customPrompt.includes("stopping to avoid a loop")),
+		)
+
+		if (isLoopAbort && this.loopAttemptTimestamps.length >= this.maxLoopRecoveryAttempts) {
+			Logger.warn(
+				`[LocalAiRecovery] Loop recovery already attempted (${this.loopAttemptTimestamps.length}/${this.maxLoopRecoveryAttempts}) within ${this.windowMs / 1000}s. Halting auto-resume to prevent a runaway tool loop.`,
+			)
+			return false
+		}
 
 		if (this.attemptTimestamps.length >= this.maxAttempts) {
 			Logger.warn(
@@ -54,6 +73,9 @@ export class LocalAiRecoveryCoordinator {
 		}
 
 		this.attemptTimestamps.push(now)
+		if (isLoopAbort) {
+			this.loopAttemptTimestamps.push(now)
+		}
 		const attemptNumber = this.attemptTimestamps.length
 		this.isRecovering = true
 
@@ -126,6 +148,7 @@ export class LocalAiRecoveryCoordinator {
 
 	reset(): void {
 		this.attemptTimestamps = []
+		this.loopAttemptTimestamps = []
 		this.isRecovering = false
 	}
 }

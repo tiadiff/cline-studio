@@ -1068,11 +1068,15 @@ export async function buildSessionConfig(input: SessionConfigInput): Promise<Cor
 
 	// Inject preferred language instructions when a non-default language is selected.
 	// Mirrors classic src/core/task/index.ts preferredLanguage handling.
+	// When English (or default) is configured, enforce answering in English so that
+	// prompts translated from other languages receive replies in English as requested.
 	try {
 		const preferredLanguageRaw = StateManager.get().getGlobalSettingsKey("preferredLanguage")
 		const preferredLanguage = getLanguageKey(preferredLanguageRaw as LanguageDisplay | undefined)
 		if (preferredLanguage && preferredLanguage !== DEFAULT_LANGUAGE_SETTINGS) {
 			systemPrompt = `${systemPrompt}\n\n# Preferred Language\n\nSpeak in ${preferredLanguage}.`
+		} else {
+			systemPrompt = `${systemPrompt}\n\n# Preferred Language\n\nAlways communicate and answer exclusively in English.`
 		}
 	} catch (error) {
 		Logger.warn("[SessionFactory] Failed to inject preferredLanguage instructions:", error)

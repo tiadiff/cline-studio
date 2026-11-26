@@ -2289,6 +2289,109 @@ type SdkMessageWithMetrics = SdkMessage & {
 	 * Only meaningful on user messages; governs the turn that follows.
 	 */
 	uiMode?: "plan" | "act" | "yolo"
+	/**
+	 * Extracted <orchestrator_evaluation> block from a user message, used to reconstruct the
+	 * Orchestrator Supervisor card in past chats.
+	 */
+	orchestratorEvaluation?: string
+	/**
+	 * Extracted [ORCHESTRATOR PLAN FEEDBACK] text from a synthetic revision message, used to
+	 * reconstruct the Orchestrator Plan Revision card in past chats.
+	 */
+	orchestratorPlanFeedback?: string
+}
+
+function formatReconstructedOrchestratorPromptCard(rawEvaluation: string): string {
+	const lines = rawEvaluation
+		.split(/\r?\n/)
+		.map((l) => l.trim())
+		.filter(Boolean)
+	let objective = ""
+	let directive = ""
+	const requirements: string[] = []
+	let inRequirements = false
+
+	for (const line of lines) {
+		if (line.startsWith("PLAN MODE & ANTI-LOOP RULES:") || line.startsWith("IMPORTANT: If the user asked a concise question")) {
+			inRequirements = false
+			continue
+		}
+		if (line.startsWith("Expanded Technical Objective:")) {
+			objective = line.slice("Expanded Technical Objective:".length).trim()
+			inRequirements = false
+			continue
+		}
+		if (line.startsWith("Objective:")) {
+			objective = line.slice("Objective:".length).trim()
+			inRequirements = false
+			continue
+		}
+		if (line.startsWith("Directive:")) {
+			directive = line.slice("Directive:".length).trim()
+			inRequirements = false
+			continue
+		}
+		if (line.startsWith("Key Requirements:")) {
+			inRequirements = true
+			const inlineReq = line.slice("Key Requirements:".length).trim()
+			if (inlineReq) {
+				requirements.push(inlineReq)
+			}
+			continue
+		}
+		if (inRequirements) {
+			requirements.push(line.replace(/^\d+\.\s*/, ""))
+		}
+	}
+
+	const calloutBody = [
+		objective ? `> **Objective:** ${objective}` : "",
+		directive ? `> **Directive:** ${directive}` : "",
+	]
+		.filter(Boolean)
+		.join("\n")
+
+	return [
+		`## 🛡️ Supervisor Evaluation`,
+		`> ### 🎯 TECHNICAL SPECIFICATION READY FOR PLAN MODE`,
+		calloutBody || `> ${lines.join("\n> ")}`,
+		`**⚡ Orchestrator Action:** Specification sent to **Plan Mode**`,
+		requirements.length > 0
+			? `**Mandatory Technical Requirements (${requirements.length}):**\n${requirements.map((r, i) => `${i + 1}. ${r}`).join("\n")}`
+			: "",
+	]
+		.filter(Boolean)
+		.join("\n\n")
+}
+
+function formatReconstructedOrchestratorRevisionCard(rawFeedback: string): string {
+	const cleaned = rawFeedback.replace(/^\[ORCHESTRATOR PLAN FEEDBACK\]\s*/i, "").trim()
+	const beforeUserReq = cleaned.split(/\n\s*User request to satisfy in full:/i)[0]?.trim() || cleaned
+	const evalMatch = beforeUserReq.match(/Supervisor Evaluation:\s*([\s\S]*?)(?:\n\s*Mandatory changes to apply to the Plan:|$)/i)
+	const changesMatch = beforeUserReq.match(/Mandatory changes to apply to the Plan:\s*([\s\S]*)$/i)
+	const evalText = evalMatch?.[1]?.trim() || "The AI Orchestrator requested changes to the plan before switching to Act Mode."
+	const changesText = changesMatch?.[1]?.trim() || ""
+
+	return [
+		`## 🛡️ Supervisor Evaluation`,
+		`> ### ⚠️ PLAN NEEDS REVISION`,
+		`>`,
+		...evalText.split(/\r?\n/).map((l) => `> ${l.trim()}`),
+		changesText ? `\n**🔧 Changes Requested by Supervisor (automatically sent to Plan Mode):**\n${changesText}` : "",
+	]
+		.filter(Boolean)
+		.join("\n")
+}
+
+function formatReconstructedOrchestratorApprovedCard(): string {
+	return [
+		`## 🛡️ Supervisor Evaluation`,
+		`> ### ✅ PLAN APPROVED BY SUPERVISOR`,
+		`>`,
+		`> Plan verified against technical requirements. Authorized start of **Act Mode**.`,
+		``,
+		`**⚡ Orchestrator Action:** Automatically triggered **Act Mode** to execute the approved plan.`,
+	].join("\n")
 }
 
 function textContentBlocksToText(content: SdkMessage["content"]): string {
@@ -2411,6 +2514,14 @@ export interface SdkMessagesToClineMessagesOptions {
 	 * display, matching the live streaming path.
 	 */
 	cwd?: string
+	/**
+	 * Persisted Orchestrator Supervisor cards from `<sessionId>.orchestrator.json`, if available.
+	 */
+	persistedOrchestratorCards?: {
+		ts: number
+		phase: "prompt" | "plan" | "act"
+		text: string
+	}[]
 }
 
 /**
@@ -2470,6 +2581,73 @@ export function sdkMessagesToClineMessages(
 			agentEventToMessages({ type: "done", reason: "completed", text: "", iterations: 0 } as AgentEvent, state),
 		)
 		state.clearTurnOutcome()
+	}
+
+	const persistedPromptCards = [...(options?.persistedOrchestratorCards?.filter((c) => c.phase === "prompt") ?? [])]
+	const persistedPlanCards = [...(options?.persistedOrchestratorCards?.filter((c) => c.phase === "plan") ?? [])]
+	const persistedActCards = [...(options?.persistedOrchestratorCards?.filter((c) => c.phase === "act") ?? [])]
+	let sawOrchestratorSupervision =
+		(options?.persistedOrchestratorCards?.length ?? 0) > 0 ||
+		messages.some((m) => Boolean(m.orchestratorEvaluation || m.orchestratorPlanFeedback))
+
+	const emitOrchestratorInfo = (text: string) => {
+		clineMessages.push({
+			ts: state.nextTs(),
+			type: "say",
+			say: "info",
+			text,
+			partial: false,
+		})
+	}
+
+	const closePrecedingTurnAtUserBoundary = (nextMessage: SdkMessageWithMetrics) => {
+		const hadPlanTurnText = currentMode === "plan" && pendingToolUses.size === 0 && !state.wasErrorSeen()
+		const previousMode = currentMode
+		if (hadPlanTurnText) {
+			endFinalTurn()
+		} else {
+			state.clearTurnOutcome()
+		}
+
+		if (nextMessage.orchestratorPlanFeedback) {
+			sawOrchestratorSupervision = true
+			const card = persistedPlanCards.shift()
+			emitOrchestratorInfo(card?.text ?? formatReconstructedOrchestratorRevisionCard(nextMessage.orchestratorPlanFeedback))
+			return
+		}
+
+		if (previousMode === "plan" && nextMessage.uiMode === "act" && isSyntheticSdkUserMessage(nextMessage)) {
+			const card = persistedPlanCards.shift()
+			if (card) {
+				emitOrchestratorInfo(card.text)
+			} else if (sawOrchestratorSupervision) {
+				emitOrchestratorInfo(formatReconstructedOrchestratorApprovedCard())
+			}
+			return
+		}
+
+		if (previousMode === "plan" && hadPlanTurnText && persistedPlanCards.length > 0) {
+			const card = persistedPlanCards.shift()
+			if (card) {
+				emitOrchestratorInfo(card.text)
+			}
+		} else if (previousMode === "act" && persistedActCards.length > 0) {
+			const card = persistedActCards.shift()
+			if (card) {
+				emitOrchestratorInfo(card.text)
+			}
+		}
+	}
+
+	const emitPromptSupervisionIfPresent = (sourceMsg: SdkMessageWithMetrics) => {
+		const card = persistedPromptCards.shift()
+		if (card) {
+			sawOrchestratorSupervision = true
+			emitOrchestratorInfo(card.text)
+		} else if (sourceMsg.orchestratorEvaluation) {
+			sawOrchestratorSupervision = true
+			emitOrchestratorInfo(formatReconstructedOrchestratorPromptCard(sourceMsg.orchestratorEvaluation))
+		}
 	}
 
 	for (const { message, sourceIndex } of projectSessionMessagesForDisplay(messages)) {
@@ -2592,15 +2770,10 @@ export function sdkMessagesToClineMessages(
 
 		if (typeof message.content === "string") {
 			const text = message.content.trim()
-			if (text) {
-				// User text marks a turn boundary: drop the preceding turn's outcome
-				// signals (its text is NOT retagged — see endFinalTurn) and pick up the mode
-				// of the NEW turn from this message's wrapper. Synthetic runtime prompts
-				// (task resumption, plan -> act auto-continue) still advance the turn/mode
-				// state but never had a visible bubble live, so don't emit one here either.
-				state.clearTurnOutcome()
+			if (text || sourceMessage.orchestratorPlanFeedback || sourceMessage.orchestratorEvaluation) {
+				closePrecedingTurnAtUserBoundary(sourceMessage)
 				currentMode = sourceMessage.uiMode ?? currentMode
-				if (!isSyntheticSdkUserMessage(message)) {
+				if (!isSyntheticSdkUserMessage(message) && text) {
 					clineMessages.push({
 						ts: state.nextTs(),
 						type: "say",
@@ -2608,16 +2781,17 @@ export function sdkMessagesToClineMessages(
 						text,
 						partial: false,
 					})
+					emitPromptSupervisionIfPresent(sourceMessage)
 				}
 			}
 			continue
 		}
 
 		const userText = textContentBlocksToText(message.content)
-		if (userText) {
-			state.clearTurnOutcome()
+		if (userText || sourceMessage.orchestratorPlanFeedback || sourceMessage.orchestratorEvaluation) {
+			closePrecedingTurnAtUserBoundary(sourceMessage)
 			currentMode = sourceMessage.uiMode ?? currentMode
-			if (!isSyntheticSdkUserMessage(message)) {
+			if (!isSyntheticSdkUserMessage(message) && userText) {
 				clineMessages.push({
 					ts: state.nextTs(),
 					type: "say",
@@ -2625,6 +2799,7 @@ export function sdkMessagesToClineMessages(
 					text: userText,
 					partial: false,
 				})
+				emitPromptSupervisionIfPresent(sourceMessage)
 			}
 		}
 
@@ -2647,8 +2822,19 @@ export function sdkMessagesToClineMessages(
 	// text) gets the inferred completion retag. Skipped when the session record says the last
 	// run failed, was cancelled, or died mid-turn: its terminal text is a dangling partial
 	// response, not a completion, and must stay a plain text row.
-	if (options?.finalTurnCompleted !== false && !state.wasErrorSeen()) {
+	if (
+		(options?.finalTurnCompleted !== false ||
+			(currentMode === "plan" && pendingToolUses.size === 0 && sawOrchestratorSupervision)) &&
+		!state.wasErrorSeen()
+	) {
 		endFinalTurn()
+	}
+
+	for (const card of persistedPlanCards) {
+		emitOrchestratorInfo(card.text)
+	}
+	for (const card of persistedActCards) {
+		emitOrchestratorInfo(card.text)
 	}
 
 	// For non-error turns, emit ask:"completion_result"

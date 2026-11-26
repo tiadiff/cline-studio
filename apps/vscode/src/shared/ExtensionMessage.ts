@@ -17,25 +17,45 @@ import { ClineMessageModelInfo } from "./messages"
 import { Mode } from "./storage/types"
 import { TelemetrySetting } from "./TelemetrySetting"
 import { UserInfo } from "./UserInfo"
+
+export type OrchestratorVerdictType =
+	| "prompt_ready"
+	| "approved"
+	| "info_approved"
+	| "revision_requested"
+	| "accepted_fallback"
+	| "blocked"
+	| "act_completed"
+	| "act_needs_work"
+
+export interface OrchestratorLastEvaluation {
+	phase: "prompt" | "plan" | "act"
+	verdict: OrchestratorVerdictType
+	score: number
+	summary: string
+	timestamp: number
+}
+
 // webview will hold state
 export interface OrchestratorUiState {
 	enabled: boolean
 	modelId: string
 	planModelId?: string
 	actModelId?: string
-	status: "idle" | "evaluating_prompt" | "evaluating_plan"
+	status: "idle" | "evaluating_prompt" | "evaluating_plan" | "evaluating_act"
 	phaseDetail?: string
 	startedAt?: number
 	revisionCount: number
 	maxRevisions: number
+	lastEvaluation?: OrchestratorLastEvaluation
 }
 
 export interface ExtensionMessage {
 	type:
-		| "grpc_response"
-		| "studio_workspace_panes_state"
-		| "studio_prompt_progress"
-		| "studio_orchestrator_state" // New type for gRPC responses & Studio layout/orchestrator sync
+	| "grpc_response"
+	| "studio_workspace_panes_state"
+	| "studio_prompt_progress"
+	| "studio_orchestrator_state" // New type for gRPC responses & Studio layout/orchestrator sync
 	grpc_response?: GrpcResponse
 	showExplorerAndEditor?: boolean
 	promptProgress?: number | null
@@ -107,6 +127,8 @@ export interface ExtensionState {
 	hostName?: string
 	shouldShowAnnouncement: boolean
 	taskHistory: HistoryItem[]
+	totalHistoryCost?: number
+	totalHistoryCount?: number
 	telemetrySetting: TelemetrySetting
 	shellIntegrationTimeout: number
 	terminalReuseEnabled?: boolean
@@ -303,18 +325,18 @@ export type ClineSay =
 
 export interface ClineSayTool {
 	tool:
-		| "editedExistingFile"
-		| "newFileCreated"
-		| "fileDeleted"
-		| "readFile"
-		| "listFilesTopLevel"
-		| "listFilesRecursive"
-		| "listCodeDefinitionNames"
-		| "searchFiles"
-		| "webFetch"
-		| "webSearch"
-		| "summarizeTask"
-		| "useSkill"
+	| "editedExistingFile"
+	| "newFileCreated"
+	| "fileDeleted"
+	| "readFile"
+	| "listFilesTopLevel"
+	| "listFilesRecursive"
+	| "listCodeDefinitionNames"
+	| "searchFiles"
+	| "webFetch"
+	| "webSearch"
+	| "summarizeTask"
+	| "useSkill"
 	path?: string
 	diff?: string
 	content?: string

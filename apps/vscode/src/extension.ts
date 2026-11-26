@@ -158,9 +158,17 @@ export async function activate(context: vscode.ExtensionContext) {
 				return
 			}
 
+			let panelTitle = "Cline Agent Studio"
+			try {
+				const buildInfo = require("./build-info.json")
+				if (buildInfo?.build) {
+					panelTitle = `Cline #${buildInfo.build}`
+				}
+			} catch {}
+
 			const panel = vscode.window.createWebviewPanel(
 				"cline.fullScreenView",
-				"Cline Agent Studio",
+				panelTitle,
 				column,
 				{
 					enableScripts: true,

@@ -170,6 +170,11 @@ async function replaceInFile(
 	const eol = detectLineEnding(content);
 	const normalizedOldStr = normalizeLineEndings(oldStr, eol);
 	const normalizedNewStr = normalizeLineEndings(newStr ?? "", eol);
+	if (normalizedOldStr === normalizedNewStr) {
+		throw new Error(
+			`No replacement performed: \`old_text\` and \`new_text\` are identical in ${filePath}. Provide a different \`new_text\` that actually modifies the code.`,
+		);
+	}
 	const occurrences = countOccurrences(content, normalizedOldStr);
 
 	if (occurrences === 0) {

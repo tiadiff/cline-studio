@@ -64,13 +64,20 @@ export async function refreshOpenAiModels(controller: Controller, request: OpenA
 
 		const config: AxiosRequestConfig = {
 			headers: {
-				...(providerConfig.headers ?? {}),
+				...(providerConfig?.headers ?? {}),
 				...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
 			},
+			timeout: 5000,
 		}
 
 		const response = await axios.get(`${baseUrl}/models`, { ...config, ...getAxiosSettings() })
-		const rawItems: any[] = Array.isArray(response.data?.data) ? response.data.data : []
+		const rawItems: unknown[] = Array.isArray(response.data?.data)
+			? response.data.data
+			: Array.isArray(response.data?.models)
+				? response.data.models
+				: Array.isArray(response.data)
+					? response.data
+					: []
 		const disabledSet = getLocalAiDisabledModels()
 
 		const modelsArray: string[] = []

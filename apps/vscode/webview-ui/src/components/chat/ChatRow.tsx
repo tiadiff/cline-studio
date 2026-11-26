@@ -1085,7 +1085,13 @@ export const ChatRowContent = memo(
 					case "cloud_provisioning":
 						return <CloudProvisioningRow active={lastModifiedMessage?.ts === message.ts} message={message} />
 					case "info": {
-						const isOrchestratorInfo = !!message.text?.includes("Orchestratore AI")
+						const isOrchestratorInfo =
+							!!message.text &&
+							(message.text.includes("Orchestratore AI") ||
+								message.text.includes("Supervisor Evaluation") ||
+								message.text.includes("AI Supervisor") ||
+								message.text.includes("Orchestrator Action") ||
+								message.text.includes("AI Orchestrator"))
 						return (
 							<div
 								className={cn(

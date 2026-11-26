@@ -62,7 +62,8 @@ const noScreenshotIconStyle: CSSProperties = {
 	color: "var(--vscode-descriptionForeground)",
 }
 const consoleLogsContainerStyle: CSSProperties = { width: "100%" }
-const consoleLogsTextStyle: CSSProperties = { fontSize: "0.8em" }
+const consoleLogsHeaderStyle: CSSProperties = { opacity: 0.7, backgroundColor: "var(--vscode-editor-background)" }
+const consoleLogsTextStyle: CSSProperties = { fontSize: "0.7em", color: "var(--vscode-text-muted)" }
 const paginationContainerStyle: CSSProperties = {
 	display: "flex",
 	justifyContent: "space-between",
@@ -424,7 +425,7 @@ const BrowserSessionRow = memo((props: BrowserSessionRowProps) => {
 					)}
 				</div>
 
-				<div style={consoleLogsContainerStyle}>
+				<div style={consoleLogsHeaderStyle}>
 					<div
 						onClick={() => {
 							setConsoleLogsExpanded(!consoleLogsExpanded)

@@ -328,6 +328,15 @@ export class VscodeWebviewProvider extends WebviewProvider implements vscode.Web
 		}
 
 		Logger.log("[VscodeWebviewProvider] Webview panel resolved (Full Screen Mode)")
+
+		try {
+			const buildInfo = require("../../build-info.json")
+			if (buildInfo?.build) {
+				panel.title = `Cline #${buildInfo.build}`
+			}
+		} catch {
+			// ignore reading error
+		}
 	}
 
 	/**

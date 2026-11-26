@@ -97,6 +97,7 @@ import { SdkSessionConfigChangeCoordinator } from "./sdk-session-config-change-c
 import { SdkSessionEventCoordinator } from "./sdk-session-event-coordinator"
 import { LocalAiRecoveryCoordinator } from "./local-ai-recovery-coordinator"
 import { LocalAiOrchestratorCoordinator, type OrchestratorStateSnapshot } from "./local-ai-orchestrator-coordinator"
+import { PromptTranslatorService } from "./prompt-translator"
 import { SdkSessionHistoryLoader } from "./sdk-session-history-loader"
 import { SdkSessionLifecycle } from "./sdk-session-lifecycle"
 import { SdkSessionRebuildScheduler } from "./sdk-session-rebuild-scheduler"
@@ -849,7 +850,7 @@ export class Controller {
 				void this.localAiRecovery.handleTurnError()
 			},
 			onTurnCompleted: () => {
-				void this.localAiOrchestrator.handlePlanTurnCompleted()
+				void this.localAiOrchestrator.handleTurnCompleted()
 			},
 		})
 		// Subscribe to MCP tool list changes so we can restart the SDK session
@@ -1651,7 +1652,25 @@ export class Controller {
 		this.turnStateTracker.set("streaming")
 		// Clear the previous turn's completion signal so this turn's phase is computed fresh.
 		this.messageTranslatorState.clearTurnOutcome()
-		return this.taskStart.initTask(prompt, images, files, historyItem, taskSettings)
+
+		// Auto-translation: if the prompt is in Italian (or another language), translate it to English
+		// before creating the task so the UI shows the translated English prompt immediately.
+		let effectivePrompt = prompt
+		if (effectivePrompt?.trim()) {
+			try {
+				const translation = await PromptTranslatorService.get().translatePrompt(effectivePrompt)
+				if (translation.wasTranslated) {
+					Logger.log(
+						`[SdkController] Initial prompt auto-translated from '${translation.detectedLang}' to English: "${effectivePrompt.substring(0, 40)}" -> "${translation.translated.substring(0, 40)}"`,
+					)
+					effectivePrompt = translation.translated
+				}
+			} catch (error) {
+				Logger.warn("[SdkController] Prompt auto-translation failed, using original prompt:", error)
+			}
+		}
+
+		return this.taskStart.initTask(effectivePrompt, images, files, historyItem, taskSettings)
 	}
 
 	/**
@@ -1874,7 +1893,25 @@ export class Controller {
 		this.postStateToWebview().catch((error) => {
 			Logger.error("[SdkController] Failed to post state after askResponse phase change:", error)
 		})
-		await this.followups.askResponse(prompt, images, files, this.task?.taskState?.askResponse, turnStateBefore.phase)
+
+		// Auto-translation: if the follow-up message is in Italian (or another language), translate it to English
+		// before sending so that the UI user bubble and the model both receive the English translation.
+		let effectivePrompt = prompt
+		if (effectivePrompt?.trim()) {
+			try {
+				const translation = await PromptTranslatorService.get().translatePrompt(effectivePrompt)
+				if (translation.wasTranslated) {
+					Logger.log(
+						`[SdkController] Follow-up prompt auto-translated from '${translation.detectedLang}' to English: "${effectivePrompt.substring(0, 40)}" -> "${translation.translated.substring(0, 40)}"`,
+					)
+					effectivePrompt = translation.translated
+				}
+			} catch (error) {
+				Logger.warn("[SdkController] Follow-up auto-translation failed, using original prompt:", error)
+			}
+		}
+
+		await this.followups.askResponse(effectivePrompt, images, files, this.task?.taskState?.askResponse, turnStateBefore.phase)
 	}
 
 	async editMessageAndRegenerate(input: {
@@ -2725,7 +2762,7 @@ export class Controller {
 				// badge and anything else keyed on workspaceRoots depend on it.
 				workspaceManager: await this.ensureWorkspaceManager(),
 			})
-			const sdkTaskHistory = (await this.taskHistory.listHistory({ limit: 100, hydrate: false }))
+			const sdkTaskHistory = (await this.taskHistory.listHistory({ hydrate: false }))
 				.map(sessionHistoryRecordToHistoryItem)
 				.filter((item) => item.ts && item.task)
 				.sort((a, b) => b.ts - a.ts)
@@ -2774,10 +2811,24 @@ export class Controller {
 				}
 			}
 
-			const processedTaskHistory = Array.from(mergedTaskHistoryById.values())
+			const allValidHistory = Array.from(mergedTaskHistoryById.values())
 				.filter((item) => item.ts && item.task)
 				.sort((a, b) => b.ts - a.ts)
-				.slice(0, 100)
+
+			let totalHistoryCost = 0
+			for (const item of allValidHistory) {
+				if (
+					item.executionTarget !== "cloud" &&
+					typeof item.totalCost === "number" &&
+					Number.isFinite(item.totalCost) &&
+					item.totalCost > 0
+				) {
+					totalHistoryCost += item.totalCost
+				}
+			}
+			const totalHistoryCount = allValidHistory.length
+
+			const processedTaskHistory = allValidHistory.slice(0, 100)
 
 			let queuedPrompts: ExtensionState["queuedPrompts"] = []
 			if (snapshotSession) {
@@ -2815,6 +2866,8 @@ export class Controller {
 					? processedTaskHistory.find((item) => item.id === snapshotTask.taskId)
 					: undefined,
 				taskHistory: processedTaskHistory,
+				totalHistoryCost,
+				totalHistoryCount,
 				turnState: this.turnStateTracker.get(),
 				queuedPrompts,
 				cloudSessionsAvailable: isCloudSessionsFeatureAvailable(),

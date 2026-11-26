@@ -56,7 +56,7 @@ export function resolveSdkRuntimeBuildId(repoRoot: string): string {
 	}
 
 	const hash = createHash("sha256");
-	for (const path of inputs.sort()) {
+	for (const path of inputs.filter((p) => existsSync(p)).sort()) {
 		const inputName = relative(repoRoot, path).replaceAll("\\", "/");
 		hash.update(inputName);
 		hash.update("\0");

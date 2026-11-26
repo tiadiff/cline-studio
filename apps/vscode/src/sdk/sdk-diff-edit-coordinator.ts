@@ -418,6 +418,11 @@ export function computeNewEditorContent(
 	const eol = detectLineEnding(originalContent)
 	const normalizedOldText = normalizeLineEndings(input.old_text, eol)
 	const normalizedNewText = normalizeLineEndings(input.new_text ?? "", eol)
+	if (normalizedOldText === normalizedNewText) {
+		throw new Error(
+			`No replacement performed: \`old_text\` and \`new_text\` are identical in ${filePath}. Provide a different \`new_text\` that actually modifies the code.`,
+		)
+	}
 	const occurrences = normalizedOldText.length === 0 ? 0 : originalContent.split(normalizedOldText).length - 1
 	if (occurrences === 0) {
 		throw new Error(`No replacement performed: text not found in ${filePath}.`)

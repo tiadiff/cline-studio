@@ -102,4 +102,16 @@ describe("refreshOpenAiModels", () => {
 
 		expect(response.values).toEqual([])
 	})
+
+	it("handles missing providerConfig gracefully when request supplies baseUrl", async () => {
+		mocks.readProviderConfig.mockReturnValue(undefined)
+
+		const response = await refreshOpenAiModels(
+			makeController(),
+			OpenAiModelsRequest.create({ baseUrl: "http://localhost:8080/v1", providerId: "openai" }),
+		)
+
+		expect(response.values).toEqual(["model-alpha", "model-beta"])
+		expect(mocks.axiosGet).toHaveBeenCalledWith("http://localhost:8080/v1/models", expect.objectContaining({ timeout: 5000 }))
+	})
 })
